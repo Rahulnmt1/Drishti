@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Per-venv (machine-specific, ~150MB with playwright + chromium)
+.venv/
+venv/
+
+# Local engine state — regenerable by `refresh.sh` / `run.py`
+kb_index.sqlite
+_logs/
+
+# Editor / IDE local state
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test scaffolding leftover from CI-style verification
+# (the bank folder for "Test_Sync_Bank" sits outside this repo anyway —
+#  it's a sibling of _engine/, under KnowledgeBase/ — so no rule needed
+#  here. Just here to document that it's intentional.)

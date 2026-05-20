@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 700" width="960" height="700">
+  <style>
+    .label { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .title { font-size: 20px; font-weight: 700; fill: #0f172a; }
+    .h2 { font-size: 16px; font-weight: 700; fill: #0f172a; }
+    .body { font-size: 13px; fill: #1f2937; }
+    .small { font-size: 12px; fill: #4b5563; }
+    .tiny { font-size: 11px; fill: #6b7280; }
+    .arrow-label { font-size: 11px; font-weight: 600; fill: #6b7280; }
+    .subtitle { font-size: 13px; fill: #475569; font-style: italic; }
+  </style>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#334155"/>
+    </marker>
+    <marker id="arrowBlue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/>
+    </marker>
+    <filter id="softShadow" x="-2%" y="-2%" width="104%" height="108%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="1.5"/>
+      <feOffset dx="0" dy="2" result="offsetblur"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.18"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="960" height="700" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="480" y="30" text-anchor="middle" class="label title">Indian Banking Knowledge Base — Architecture</text>
+  <text x="480" y="50" text-anchor="middle" class="label subtitle">Manual-trigger only. refresh.sh is the single entry point.</text>
+
+  <!-- 1. User -->
+  <g filter="url(#softShadow)">
+    <rect x="410" y="74" width="140" height="44" rx="22" ry="22" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+    <text x="480" y="102" text-anchor="middle" class="label h2">You · on your Mac</text>
+  </g>
+
+  <!-- Arrow: user → terminal -->
+  <line x1="480" y1="118" x2="480" y2="148" stroke="#2563eb" stroke-width="2" marker-end="url(#arrowBlue)"/>
+
+  <!-- 2. Cursor Terminal -->
+  <g filter="url(#softShadow)">
+    <rect x="80" y="152" width="800" height="80" rx="10" ry="10" fill="#f8fafc" stroke="#2563eb" stroke-width="2"/>
+    <text x="100" y="180" class="label h2">Cursor Terminal</text>
+    <text x="100" y="206" class="code body">$ ./_engine/_scheduler/refresh.sh </text>
+    <text x="330" y="206" class="code small">[--bank Kotak_Mahindra_Bank | --mode backfill | --status]</text>
+    <text x="100" y="224" class="label small">Activates the venv. Refuses to race anything else. Prints a Cowork-style summary at the end.</text>
+  </g>
+
+  <!-- Arrow: terminal → engine -->
+  <line x1="320" y1="232" x2="320" y2="266" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="338" y="252" class="label arrow-label">invokes</text>
+
+  <!-- 3. Engine -->
+  <g filter="url(#softShadow)">
+    <rect x="80" y="270" width="500" height="170" rx="10" ry="10" fill="#ffedd5" stroke="#ea580c" stroke-width="2"/>
+    <text x="100" y="298" class="label h2">Engine</text>
+    <text x="100" y="320" class="code body">python3 _engine/run.py  --mode daily|backfill  [--bank NAME]</text>
+    <line x1="100" y1="332" x2="560" y2="332" stroke="#fb923c" stroke-width="1" stroke-dasharray="3 3"/>
+    <text x="100" y="354" class="label body">1. Loads banks_config.json, ensures folder skeleton for any new bank</text>
+    <text x="100" y="376" class="label body">2. Per bank: NSE corp-announcements API → IR pages → discover PDF anchors</text>
+    <text x="100" y="398" class="label body">3. Downloads new PDFs (Playwright renders JS-driven pages: HDFC, ICICI, SBI…)</text>
+    <text x="100" y="420" class="label body">4. Extracts text, classifies (deck/AR/transcript/PR), updates FTS5 index</text>
+  </g>
+
+  <!-- 4. Internet / Banks (right side) -->
+  <g filter="url(#softShadow)">
+    <rect x="630" y="295" width="250" height="120" rx="10" ry="10" fill="#f3f4f6" stroke="#64748b" stroke-width="2" stroke-dasharray="6 4"/>
+    <text x="650" y="323" class="label h2">Bank IR sites + NSE</text>
+    <text x="650" y="346" class="label small">www.kotak.bank.in</text>
+    <text x="650" y="362" class="label small">www.hdfcbank.com</text>
+    <text x="650" y="378" class="label small">www.yes.bank.in, www.axisbank.com…</text>
+    <text x="650" y="402" class="label tiny">www.nseindia.com (corp announcements)</text>
+  </g>
+
+  <!-- Arrows: engine ↔ internet -->
+  <line x1="580" y1="335" x2="628" y2="335" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="628" y1="375" x2="580" y2="375" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="604" y="328" text-anchor="middle" class="label arrow-label">GET</text>
+  <text x="604" y="392" text-anchor="middle" class="label arrow-label">PDFs</text>
+
+  <!-- Arrow: engine → storage -->
+  <line x1="320" y1="440" x2="320" y2="478" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="340" y="464" class="label arrow-label">writes</text>
+
+  <!-- 5. Storage -->
+  <g filter="url(#softShadow)">
+    <rect x="80" y="482" width="800" height="190" rx="10" ry="10" fill="#d1fae5" stroke="#059669" stroke-width="2"/>
+    <text x="100" y="510" class="label h2">KnowledgeBase/  (on disk)</text>
+    <line x1="100" y1="520" x2="860" y2="520" stroke="#34d399" stroke-width="1" stroke-dasharray="3 3"/>
+
+    <text x="100" y="544" class="code body">├── &lt;Bank&gt;/&lt;type&gt;/FY&lt;N&gt;/*.pdf</text>
+    <text x="430" y="544" class="label small">per-bank PDFs, bucketed by doc type and fiscal year</text>
+
+    <text x="100" y="566" class="code body">├── &lt;Bank&gt;/extracted_text/*.txt</text>
+    <text x="430" y="566" class="label small">plain-text extraction (what FTS5 actually indexes)</text>
+
+    <text x="100" y="588" class="code body">└── _engine/</text>
+
+    <text x="100" y="610" class="code body">      ├── _logs/run_YYYY-MM-DD_HHMM.json</text>
+    <text x="430" y="610" class="label small">per-run summary — counts, errors, per-bank stats</text>
+
+    <text x="100" y="632" class="code body">      └── kb_index.sqlite</text>
+    <text x="430" y="632" class="label small">SQLite FTS5 index — query via _engine/query.py</text>
+
+    <text x="100" y="660" class="label tiny">git-tracked: code + config + scheduler.   git-ignored: .venv, kb_index.sqlite, _logs/, bank PDFs.</text>
+  </g>
+</svg>

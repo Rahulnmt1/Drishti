@@ -1,0 +1,61 @@
+# Cowork egress allowlist — required for the daily KB refresh
+#
+# Why this file exists
+# --------------------
+# The scheduled task `banking-kb-daily-refresh` runs inside Cowork's sandbox.
+# Cowork enforces a per-workspace egress allowlist on the outbound proxy
+# (HTTP 403 with header `X-Proxy-Error: blocked-by-allowlist`).
+#
+# As of 2026-05-19, the allowlist only contains:
+#     *.anthropic.com, anthropic.com, claude.com, *.claude.com,
+#     endpoint4.collection.sumologic.com
+#
+# Every domain the engine needs to fetch from is blocked, so the refresh
+# fails on the first HTTP call (NSE warmup) and no log is written.
+#
+# How to fix (one-time)
+# ---------------------
+# 1. Open Claude desktop → Settings → Capabilities → Network access.
+#    (On Team/Enterprise plans this is an admin setting; ping your workspace
+#    owner.)
+# 2. Add every domain below to the allowlist. Wildcards on subdomains are
+#    fine if the UI supports them (e.g. `*.bank.in` covers the Bank.in
+#    bundle).
+# 3. Re-run the scheduled task (or trigger `banking-kb-daily-refresh`
+#    manually). The engine is idempotent, so it's safe to re-run.
+#
+# Domains the engine fetches from (24)
+# ------------------------------------
+# Market data / regulatory:
+www.nseindia.com
+nsearchives.nseindia.com
+
+# Private-sector banks:
+www.hdfcbank.com
+www.icicibank.com
+www.axisbank.com
+www.idfcfirst.bank.in
+www.indusind.bank.in
+www.federal.bank.in
+www.rblbank.com
+www.rbl.bank.in
+www.yesbank.in
+ir.kotak.com
+bandhan.bank.in
+
+# Public-sector banks:
+bank.sbi
+sbi.bank.in
+bankofbaroda.bank.in
+bankofindia.bank.in
+pnb.bank.in
+canarabank.bank.in
+www.unionbankofindia.co.in
+www.indianbank.in
+www.iob.bank.in
+www.ucobank.com
+centralbankofindia.co.in
+
+# After updating the allowlist, you can confirm from a bash cell with:
+#     curl -sS -o /dev/null -w "%{http_code}\n" https://www.hdfcbank.com/
+# A 200/301/302 means the proxy is letting traffic through.

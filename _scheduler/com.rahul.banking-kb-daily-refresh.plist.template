@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent for the Indian-banking knowledge-base daily refresh.
+
+  This template is rendered by install.sh. The four placeholders below
+  (KB_ROOT, PYTHON_BIN, HOUR, MINUTE) are substituted with absolute paths
+  and the chosen run time before the rendered plist is loaded into
+  launchd.
+
+  The rendered plist lives at ~/Library/LaunchAgents/com.rahul.banking-kb-daily-refresh.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.rahul.banking-kb-daily-refresh</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__KB_ROOT__/_engine/_scheduler/run_daily.sh</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>KB_ROOT</key>
+        <string>__KB_ROOT__</string>
+        <key>PYTHON_BIN</key>
+        <string>__PYTHON_BIN__</string>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict>
+            <key>Weekday</key>
+            <integer>1</integer>
+            <key>Hour</key>
+            <integer>__HOUR__</integer>
+            <key>Minute</key>
+            <integer>__MINUTE__</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key>
+            <integer>2</integer>
+            <key>Hour</key>
+            <integer>__HOUR__</integer>
+            <key>Minute</key>
+            <integer>__MINUTE__</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key>
+            <integer>3</integer>
+            <key>Hour</key>
+            <integer>__HOUR__</integer>
+            <key>Minute</key>
+            <integer>__MINUTE__</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key>
+            <integer>4</integer>
+            <key>Hour</key>
+            <integer>__HOUR__</integer>
+            <key>Minute</key>
+            <integer>__MINUTE__</integer>
+        </dict>
+        <dict>
+            <key>Weekday</key>
+            <integer>5</integer>
+            <key>Hour</key>
+            <integer>__HOUR__</integer>
+            <key>Minute</key>
+            <integer>__MINUTE__</integer>
+        </dict>
+    </array>
+
+    <!-- If the Mac was asleep/off at the scheduled time, run as soon as it wakes. -->
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StartOnMount</key>
+    <false/>
+
+    <!-- launchd's own stdout/stderr capture; the wrapper also writes its own log. -->
+    <key>StandardOutPath</key>
+    <string>__KB_ROOT__/_engine/_logs/launchd_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__KB_ROOT__/_engine/_logs/launchd_stderr.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>__KB_ROOT__</string>
+</dict>
+</plist>

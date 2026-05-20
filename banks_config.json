@@ -1,0 +1,212 @@
+{
+  "version": 1,
+  "description": "Configured sources for top 10 private + top 10 PSU banks in India. Each bank has one or more `sources` entries pointing at HTML index pages. The engine fetches each index, extracts every PDF link, classifies it (investor_presentation / annual_report / transcript / press_release), and downloads anything new.",
+  "settings": {
+    "history_years": 5,
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "request_delay_seconds": 2.0,
+    "request_timeout_seconds": 15,
+    "max_pdf_size_mb": 80
+  },
+  "banks": [
+    {
+      "name": "HDFC_Bank",
+      "ticker": "HDFCBANK",
+      "category": "private",
+      "sources": [
+        {"url": "https://www.hdfcbank.com/personal/about-us/investor-relations/financial-results", "type_hint": "investor_presentation", "requires_js": true},
+        {"url": "https://www.hdfcbank.com/personal/about-us/investor-relations", "type_hint": "mixed", "requires_js": true},
+        {"url": "https://www.hdfcbank.com/personal/about-us/investor-relations/annual-reports", "type_hint": "annual_report", "requires_js": true}
+      ]
+    },
+    {
+      "name": "ICICI_Bank",
+      "ticker": "ICICIBANK",
+      "category": "private",
+      "sources": [
+        {"url": "https://www.icicibank.com/about-us/qfr", "type_hint": "investor_presentation", "requires_js": true},
+        {"url": "https://www.icicibank.com/aboutus/investor.page", "type_hint": "investor_presentation", "requires_js": true},
+        {"url": "https://www.icicibank.com/aboutus/au-ir-archive.page", "type_hint": "mixed", "requires_js": true},
+        {"url": "https://www.icicibank.com/aboutus/annual.page", "type_hint": "annual_report", "requires_js": true}
+      ]
+    },
+    {
+      "name": "Axis_Bank",
+      "ticker": "AXISBANK",
+      "category": "private",
+      "sources": [
+        {"url": "https://www.axisbank.com/shareholders-corner/financial-results-and-other-information/investor-presentations", "type_hint": "investor_presentation"},
+        {"url": "https://www.axisbank.com/shareholders-corner/financial-results-and-other-information/quarterly-financial-results", "type_hint": "mixed"},
+        {"url": "https://www.axisbank.com/shareholders-corner/annual-reports", "type_hint": "annual_report"}
+      ]
+    },
+    {
+      "name": "Kotak_Mahindra_Bank",
+      "ticker": "KOTAKBANK",
+      "category": "private",
+      "sources": [
+        {"url": "https://www.kotak.bank.in/en/investor-relations/financial-results.html", "type_hint": "mixed", "requires_js": true},
+        {"url": "https://www.kotak.bank.in/en/investor-relations/annual-reports.html", "type_hint": "annual_report", "requires_js": true}
+      ]
+    },
+    {
+      "name": "IndusInd_Bank",
+      "ticker": "INDUSINDBK",
+      "category": "private",
+      "sources": [
+        {"url": "https://www.indusind.bank.in/in/en/investors/investor-landing/financial-information.html", "type_hint": "mixed"},
+        {"url": "https://www.indusind.bank.in/in/en/investors/investor-landing.html", "type_hint": "mixed"}
+      ]
+    },
+    {
+      "name": "Yes_Bank",
+      "ticker": "YESBANK",
+      "category": "private",
+      "sources": [
+        {"url": "https://www.yes.bank.in/about-us/investors-relation/financial-information/financial-results", "type_hint": "mixed", "requires_js": true},
+        {"url": "https://www.yes.bank.in/about-us/investors-relation/financial-information/investor-presentation", "type_hint": "investor_presentation", "requires_js": true},
+        {"url": "https://www.yes.bank.in/about-us/investors-relation/financial-information/annual-reports", "type_hint": "annual_report", "requires_js": true}
+      ]
+    },
+    {
+      "name": "IDFC_First_Bank",
+      "ticker": "IDFCFIRSTB",
+      "category": "private",
+      "sources": [
+        {"url": "https://www.idfcfirst.bank.in/investors/financial-report", "type_hint": "mixed"},
+        {"url": "https://www.idfcfirst.bank.in/investors/annual-report", "type_hint": "annual_report"},
+        {"url": "https://www.idfcfirst.bank.in/our-history/news-media/press-releases", "type_hint": "press_release", "requires_js": true}
+      ]
+    },
+    {
+      "name": "Federal_Bank",
+      "ticker": "FEDERALBNK",
+      "category": "private",
+      "sources": [
+        {"url": "https://www.federal.bank.in/financial-result", "type_hint": "mixed"},
+        {"url": "https://www.federal.bank.in/annual-report", "type_hint": "annual_report"}
+      ]
+    },
+    {
+      "name": "RBL_Bank",
+      "ticker": "RBLBANK",
+      "category": "private",
+      "sources": [
+        {"url": "https://www.rbl.bank.in/investor-relations", "type_hint": "mixed"},
+        {"url": "https://www.rblbank.com/investor-relations/disclosures-regulation-46/financial-highlights", "type_hint": "mixed"}
+      ]
+    },
+    {
+      "name": "Bandhan_Bank",
+      "ticker": "BANDHANBNK",
+      "category": "private",
+      "sources": [
+        {"url": "https://bandhan.bank.in/investor-relations", "type_hint": "mixed"},
+        {"url": "https://bandhan.bank.in/quarterly-report", "type_hint": "investor_presentation"},
+        {"url": "https://bandhan.bank.in/annual-report", "type_hint": "annual_report"}
+      ]
+    },
+    {
+      "name": "State_Bank_of_India",
+      "ticker": "SBIN",
+      "category": "public",
+      "sources": [
+        {"url": "https://sbi.bank.in/web/investor-relations/analyst-presentation", "type_hint": "investor_presentation", "requires_js": true},
+        {"url": "https://sbi.bank.in/web/investor-relations/reports", "type_hint": "mixed", "requires_js": true},
+        {"url": "https://sbi.bank.in/web/investor-relations/annual-report", "type_hint": "annual_report", "requires_js": true},
+        {"url": "https://bank.sbi/web/investor-relations/analyst-presentation", "type_hint": "investor_presentation"}
+      ]
+    },
+    {
+      "name": "Bank_of_Baroda",
+      "ticker": "BANKBARODA",
+      "category": "public",
+      "sources": [
+        {"url": "https://bankofbaroda.bank.in/shareholders-corner/presentation-made-to-analyst", "type_hint": "investor_presentation"},
+        {"url": "https://bankofbaroda.bank.in/shareholders-corner/financial-reports", "type_hint": "mixed"},
+        {"url": "https://bankofbaroda.bank.in/shareholders-corner/annual-reports", "type_hint": "annual_report"}
+      ]
+    },
+    {
+      "name": "Punjab_National_Bank",
+      "ticker": "PNB",
+      "category": "public",
+      "sources": [
+        {"url": "https://pnb.bank.in/financials-current.html", "type_hint": "mixed"},
+        {"url": "https://pnb.bank.in/Investor-Info.html", "type_hint": "mixed"},
+        {"url": "https://pnb.bank.in/annual-reports.html", "type_hint": "annual_report"}
+      ]
+    },
+    {
+      "name": "Canara_Bank",
+      "ticker": "CANBK",
+      "category": "public",
+      "sources": [
+        {"url": "https://canarabank.bank.in/pages/investor-presentation", "type_hint": "investor_presentation"},
+        {"url": "https://canarabank.bank.in/pages/financial-results", "type_hint": "mixed"},
+        {"url": "https://canarabank.bank.in/pages/annual-reports", "type_hint": "annual_report"}
+      ]
+    },
+    {
+      "name": "Union_Bank_of_India",
+      "ticker": "UNIONBANK",
+      "category": "public",
+      "sources": [
+        {"url": "https://www.unionbankofindia.co.in/english/investor-financial-result.aspx", "type_hint": "mixed"},
+        {"url": "https://www.unionbankofindia.co.in/english/investor-analyst-presentation.aspx", "type_hint": "investor_presentation"},
+        {"url": "https://www.unionbankofindia.co.in/english/investor-annual-report.aspx", "type_hint": "annual_report"}
+      ]
+    },
+    {
+      "name": "Bank_of_India",
+      "ticker": "BANKINDIA",
+      "category": "public",
+      "sources": [
+        {"url": "https://bankofindia.bank.in/investor-presentation-sebi", "type_hint": "investor_presentation"},
+        {"url": "https://bankofindia.bank.in/investor-corner", "type_hint": "mixed"},
+        {"url": "https://bankofindia.bank.in/financial-results", "type_hint": "mixed"},
+        {"url": "https://bankofindia.bank.in/annual-report", "type_hint": "annual_report"}
+      ]
+    },
+    {
+      "name": "Indian_Bank",
+      "ticker": "INDIANB",
+      "category": "public",
+      "sources": [
+        {"url": "https://www.indianbank.in/departments/investor-analyst-presentation/", "type_hint": "investor_presentation"},
+        {"url": "https://www.indianbank.in/departments/financial-results/", "type_hint": "mixed"},
+        {"url": "https://www.indianbank.in/departments/annual-report/", "type_hint": "annual_report"}
+      ]
+    },
+    {
+      "name": "Central_Bank_of_India",
+      "ticker": "CENTRALBK",
+      "category": "public",
+      "sources": [
+        {"url": "https://centralbankofindia.co.in/en/investor-relations", "type_hint": "mixed"},
+        {"url": "https://centralbankofindia.co.in/en/node/219214", "type_hint": "investor_presentation"},
+        {"url": "https://centralbankofindia.co.in/en/annual-report", "type_hint": "annual_report"}
+      ]
+    },
+    {
+      "name": "Indian_Overseas_Bank",
+      "ticker": "IOB",
+      "category": "public",
+      "sources": [
+        {"url": "https://www.iob.bank.in/en/presentation-to-analysts", "type_hint": "investor_presentation"},
+        {"url": "https://www.iob.bank.in/en/financial-results", "type_hint": "mixed"},
+        {"url": "https://www.iob.bank.in/en/annual-report", "type_hint": "annual_report"}
+      ]
+    },
+    {
+      "name": "UCO_Bank",
+      "ticker": "UCOBANK",
+      "category": "public",
+      "sources": [
+        {"url": "https://www.ucobank.com/english/investor-corner.aspx", "type_hint": "mixed"},
+        {"url": "https://www.ucobank.com/english/investor-presentation.aspx", "type_hint": "investor_presentation"},
+        {"url": "https://www.ucobank.com/english/annual-report.aspx", "type_hint": "annual_report"}
+      ]
+    }
+  ]
+}
