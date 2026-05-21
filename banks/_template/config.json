@@ -5,6 +5,9 @@
   "ticker": "",
   "category": "private",
 
+  "_comment_use_nse": "Optional. Default true — engine pulls corporate filings from the NSE announcements API for this bank's ticker. Set to false for banks whose IR page is curated + exhaustive (an adapter.py likely filters it cleanly already) and you don't want NSE adding duplicate / off-topic filings (earnings-call intimations, analyst-meet schedules, etc.).",
+  "use_nse": true,
+
   "sources": [
     {
       "url": "https://www.example.bank.in/investor-relations",

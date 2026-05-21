@@ -27,18 +27,22 @@ if you ever need to expand.
 
 ## Per-bank workspace, not monolithic config
 
-Each bank lives in its own folder under `banks/<BankName>/`:
+Each bank lives in its own folder under `banks/<BankName>/`. The first one
+shipped in this repo is HDFC_Bank — it serves as the worked example
+throughout this doc:
 
 ```
 banks/HDFC_Bank/
-├── config.json    ← ticker, IR sources, requires_js flag, optional per-bank doc_types
-├── notes.md       ← human troubleshooting log ("HDFC's React picker breaks because…")
-└── adapter.py     ← OPTIONAL — custom Python to drive bank-specific UI quirks
+├── config.json    ← ticker, IR sources, requires_js, use_nse, optional per-bank doc_types
+├── notes.md       ← human troubleshooting log (HDFC's exact page structure + why the adapter exists)
+└── adapter.py     ← custom Python: keep only IP/PR rows from HDFC's aria-labelled grid
 ```
 
 See [`banks/README.md`](banks/README.md) for the full per-bank file shape and
-adapter examples. The starting state ships with zero registered banks; add
-them one at a time with `python3 add_bank.py <Name>` as you onboard each.
+adapter contract, and [`banks/HDFC_Bank/notes.md`](banks/HDFC_Bank/notes.md)
+for a real example of what a populated notes file looks like. The starting
+state otherwise ships with zero registered banks; add them one at a time
+with `python3 add_bank.py <Name>` as you onboard each.
 
 ---
 
@@ -104,11 +108,14 @@ KnowledgeBase/
 │   ├── ALLOWLIST_REQUIRED.txt  # only relevant if you ever run fetch inside Cowork
 │   └── README.md            # this file
 ├── HDFC_Bank/                                          # ← bank corpus folders (siblings of _engine/)
-│   ├── investor_presentations/FY2026/Q2FY26-Earnings-Presentation.pdf
-│   ├── press_releases/FY2026/...
+│   ├── investor_presentations/
+│   │   ├── FY2025/{Q1,Q2,Q3,Q4}FY25-earnings-presentation.pdf
+│   │   └── FY2026/{q1,q2,Q3,q4}fy26-earnings-presentation.pdf
+│   ├── press_releases/
+│   │   ├── FY2024/press-release-to-announce-financial-results-*.pdf  (4 quarters)
+│   │   ├── FY2025/press-release-to-announce-financial-results-*.pdf  (4 quarters)
+│   │   └── FY2026/press-release-{june,september,december,march}-*.pdf
 │   └── extracted_text/*.txt
-├── ICICI_Bank/
-│   └── ...
 └── ... (one folder per bank you've added)
 ```
 
@@ -156,93 +163,100 @@ source .venv/bin/activate
 
 ## End-to-end pilot on one bank
 
-The engine ships with **zero registered banks**. You add them one at a time
-as you onboard each — see [Adding a new bank](#adding-a-new-bank-or-customer).
-The full first-bank flow is:
+The engine ships with **HDFC_Bank** already registered as the worked example;
+that's also a good first read for how a per-bank workspace with a custom
+adapter actually looks. New banks get added one at a time — see
+[Adding a new bank](#adding-a-new-bank-or-customer). The HDFC flow that's
+already wired up:
 
 ```bash
 cd "/Users/rahul.choubey/Documents/RWork/Banking_Data/KnowledgeBase/_engine"
 source .venv/bin/activate
 
-# 1. Scaffold the bank's workspace and immediately backfill 5 years.
-#    Axis Bank is a good first pilot — server-rendered IR pages (Playwright
-#    not strictly required) and an NSE ticker (so NSE auto-discovery also
-#    contributes).
-python3 add_bank.py Axis_Bank \
-    --ticker AXISBANK --category private \
-    --source 'https://www.axisbank.com/shareholders-corner/other-information/investor-presentations' investor_presentation \
-    --source 'https://www.axisbank.com/shareholders-corner/financial-information-and-others/press-releases' press_release \
-    --requires-js --no-edit
+# 1. Focus the bank so subsequent commands implicitly scope to it.
+./_scheduler/refresh.sh focus HDFC_Bank
 
-# 2. Confirm docs landed and are indexed.
-python3 run.py --status
+# 2. Full 5-year backfill (HDFC currently publishes 3 years — FY24/25/26 —
+#    on their IR page; the engine just takes what's exposed).
+./_scheduler/refresh.sh --mode backfill
 
-# 3. Sanity-check searchability.
-python3 query.py "digital banking OR generative AI" --bank Axis_Bank --limit 5
-python3 query.py "" --topic ai_ml --bank Axis_Bank --limit 5
+# 3. Confirm docs landed and are indexed.
+./_scheduler/refresh.sh --status
 
-# 4. Run --mode daily to confirm dedup works (should show new_downloads=0).
-./_scheduler/refresh.sh focus Axis_Bank
+# 4. Sanity-check searchability.
+python3 query.py "net interest margin" --bank HDFC_Bank --type investor_presentation --limit 5
+python3 query.py "profit after tax" --bank HDFC_Bank --type press_release --limit 5
+
+# 5. Run --mode daily to confirm dedup works (should show new_downloads=0).
 ./_scheduler/refresh.sh --mode daily
 ```
 
-What that does end-to-end:
+What that does end-to-end for HDFC:
 
-1. Creates `banks/Axis_Bank/{config.json, notes.md}` from the template.
-2. Creates `../Axis_Bank/{investor_presentations, press_releases, extracted_text}/`.
-3. Warms NSE cookies once and pulls Axis filings from the NSE
-   corporate-announcements API (filtered to IP / PR / financial_result via
-   `settings.json:doc_types_whitelist`).
-4. Fetches both Axis IR landing pages with Playwright (`--requires-js`),
-   iterates the native `<select>` year dropdown for the last 5 years, and
-   harvests every `<a *.pdf>` anchor across all year-views.
-5. Merges + dedups both source lists by URL.
-6. Downloads each new PDF into `Axis_Bank/<type>/FY<N>/`.
-7. Extracts text into `Axis_Bank/extracted_text/`.
-8. Indexes everything into `kb_index.sqlite`.
-9. Writes a run summary to `_engine/_logs/run_YYYY-MM-DD_HHMM_addbank_Axis_Bank.json`.
+1. Loads `banks/HDFC_Bank/{config.json, notes.md, adapter.py}` from the
+   registry. The config sets `requires_js: true` and **`use_nse: false`**
+   (HDFC's IR page is curated + exhaustive, so NSE just adds noise — see
+   below).
+2. Creates / heals `../HDFC_Bank/{investor_presentations, press_releases,
+   extracted_text}/`.
+3. Invokes `banks/HDFC_Bank/adapter.render_page()` instead of the generic
+   Playwright renderer. The adapter loads HDFC's IR page once (no year-tab
+   clicks — all 3 years are pre-rendered in the DOM as CSS show/hide),
+   filters anchors to only those with `aria-label="Download Investor
+   Presentations"` or `"Download Press Releases"`, and returns one synthetic
+   HTML blob per fiscal year (FY26/FY25/FY24).
+4. The engine treats the adapter's output as **authoritative** — it does
+   NOT fall back to the static-HTML scrape (which would re-inject the
+   filtered-out Key Parameters / Call Transcript / Financial Result rows).
+   This behavior is gated by an `adapter_used` flag inside the orchestrator.
+5. Each kept PDF gets downloaded into `HDFC_Bank/<type>/FY<N>/`, text
+   extracted into `HDFC_Bank/extracted_text/`, indexed into
+   `kb_index.sqlite`.
+6. Writes a run summary to `_engine/_logs/run_YYYY-MM-DD_HHMM.json`.
 
-### Force a clean fresh pilot
-
-```bash
-cd "/Users/rahul.choubey/Documents/RWork/Banking_Data/KnowledgeBase/_engine"
-
-# Wipe everything Axis-related: workspace, data folder, focus.
-rm -rf banks/Axis_Bank
-rm -rf ../Axis_Bank
-[ -f .kb_focus ] && rm .kb_focus
-
-# Drop Axis rows from the index (skip if you also want to keep other banks).
-sqlite3 kb_index.sqlite "DELETE FROM manifest WHERE bank = 'Axis_Bank';
-                         DELETE FROM documents WHERE bank = 'Axis_Bank';
-                         DELETE FROM doc_fts WHERE rowid NOT IN (SELECT id FROM documents);"
-
-# Re-onboard from scratch (see step 1 above).
-```
-
-### What "success" looks like
+### What "success" looks like (real output, HDFC)
 
 You should see logs like:
 
 ```
-INFO bank_kb.orchestrator: [Axis_Bank] starting (backfill mode)
-INFO bank_kb.orchestrator: [Axis_Bank] doc_type allowlist for this run: ['financial_result', 'investor_presentation', 'press_release']
-INFO bank_kb.nse_source: NSE: 35 announcements for AXISBANK in last 5 years
-INFO bank_kb.orchestrator: [Axis_Bank] fetching IR index https://www.axisbank.com/...
-INFO bank_kb.js_fetcher: iterating <select> year-views: 5 in window
-INFO bank_kb.orchestrator: [Axis_Bank] downloading https://...Q2FY26... -> Axis_Bank/investor_presentations/FY2026/...pdf
+INFO bank_kb.registry: Loaded adapter for HDFC_Bank (hooks: render_page)
+INFO bank_kb.orchestrator: [HDFC_Bank] starting (backfill mode)
+INFO bank_kb.orchestrator: [HDFC_Bank] doc_type allowlist for this run: ['financial_result', 'investor_presentation', 'press_release']
+INFO bank_kb.orchestrator: [HDFC_Bank] fetching IR index https://www.hdfc.bank.in/about-us/investor-relations
+INFO bank_kb._adapters.hdfc_bank: HDFC: FY26 -> 8 kept anchor(s)
+INFO bank_kb._adapters.hdfc_bank: HDFC: FY25 -> 8 kept anchor(s)
+INFO bank_kb._adapters.hdfc_bank: HDFC: FY24 -> 4 kept anchor(s)
+INFO bank_kb.orchestrator: [HDFC_Bank] adapter render_page() returned 3 year-view(s) for https://www.hdfc.bank.in/about-us/investor-relations
+INFO bank_kb.orchestrator: [HDFC_Bank] adapter authoritative: 20 link(s) across 3 year-view(s) (static HTML had 68, ignored) on https://...
+INFO bank_kb.orchestrator: [HDFC_Bank] downloading https://www.hdfc.bank.in/...q4fy26-earnings-presentation.pdf -> HDFC_Bank/investor_presentations/FY2026/...
 ...
-INFO bank_kb.orchestrator: [Axis_Bank] done: discovered=48 (nse=35 ir=13) in_window=45 new=45 skipped=0 skipped_by_type=11 dl_fail=0 ex_fail=0 js_render=1
+INFO bank_kb.orchestrator: [HDFC_Bank] done: discovered=20 (nse=0 ir=20) in_window=20 new=20 skipped=0 skipped_by_type=0 dl_fail=0 ex_fail=0 js_render=1
 ```
 
-`skipped_by_type=N` indicates how many discovered PDFs were dropped because
-they classified as something OUTSIDE the doc-type whitelist (annual reports,
-transcripts, footer noise) — that's the new tightening doing its job.
+The two key lines:
 
-Then `python3 run.py --status` will show ~30–50 Axis_Bank documents indexed
-across investor_presentation / press_release / financial_result. A test query
-like `python3 query.py "digital" --bank Axis_Bank` should return hits with
-snippets highlighting the matched terms.
+- **`adapter authoritative: 20 link(s) ... (static HTML had 68, ignored)`** —
+  proves the adapter's filter is in force; the engine ignored the 68
+  un-filtered anchors that raw-HTML scraping would otherwise have used.
+- **`nse=0 ir=20`** — NSE was skipped (per HDFC's `use_nse: false`), so the
+  IR page is the sole source.
+
+After this run, `./_scheduler/refresh.sh --status` will show 20 HDFC_Bank
+documents indexed (8 IPs + 12 PRs). A search like
+`python3 query.py "net interest margin" --bank HDFC_Bank` should return
+hits across HDFC's earnings decks for FY25 / FY26.
+
+### Force a clean fresh pilot for HDFC
+
+```bash
+cd "/Users/rahul.choubey/Documents/RWork/Banking_Data/KnowledgeBase/_engine"
+
+rm -rf ../HDFC_Bank                         # wipe downloaded PDFs + extracted text
+sqlite3 kb_index.sqlite "DELETE FROM manifest WHERE bank = 'HDFC_Bank';
+                         DELETE FROM documents WHERE bank = 'HDFC_Bank';
+                         DELETE FROM doc_fts WHERE rowid NOT IN (SELECT id FROM documents);"
+./_scheduler/refresh.sh --mode backfill --force   # re-fetch from scratch
+```
 
 If `new_downloads=0` and `discovered=0`, see the
 [Troubleshooting](#troubleshooting) section — usually a network/proxy issue.
@@ -547,29 +561,50 @@ via Playwright before scraping links — needed for client-rendered IR pages.
 ### Bank with quirky JS (write a per-bank adapter)
 
 If the generic Playwright path can't drive the bank's UI (custom React
-year-picker, "Load more" buttons, hover menus), add a custom adapter:
+year-picker, "Load more" buttons, hover menus, aria-label-only doc-type
+signals), write a per-bank `adapter.py`. The HDFC_Bank adapter shipped in
+this repo is the worked example — read it end-to-end before writing a new
+one:
+
+- [`banks/HDFC_Bank/adapter.py`](banks/HDFC_Bank/adapter.py) — ~150 lines.
+  Loads HDFC's IR page once, filters anchors via `aria-label`, parses fiscal
+  period from URL path, returns synthetic HTML per year.
+- [`banks/HDFC_Bank/notes.md`](banks/HDFC_Bank/notes.md) — narrates exactly
+  why the generic engine path is wrong for HDFC and what the adapter does
+  about it. Read this first if you're about to clone the approach.
+- [`banks/HDFC_Bank/config.json`](banks/HDFC_Bank/config.json) — shows the
+  three flags that matter: `requires_js: true` (route through JS path),
+  `use_nse: false` (skip NSE — the adapter is the authoritative source),
+  no per-bank `doc_types` (inherit the global IP/PR/FR whitelist).
+
+Workflow for a new bank that needs an adapter:
 
 ```bash
-# 1. Scaffold + manually open notes.md in your editor (no backfill yet)
-python3 add_bank.py HDFC_Bank --ticker HDFCBANK --category private \
-    --source 'https://www.hdfcbank.com/personal/about-us/investor-relations' \
+# 1. Scaffold the workspace (no backfill yet — adapter doesn't exist).
+python3 add_bank.py Some_Bank --ticker SOMEBANK --category private \
+    --source 'https://www.somebank.com/investor-relations' \
     --requires-js --no-backfill
 
-# 2. Copy the adapter stub and start customizing
-cp banks/_template/adapter.py.example banks/HDFC_Bank/adapter.py
+# 2. Copy the adapter stub and crib HDFC's structure for your starting point.
+cp banks/_template/adapter.py.example banks/Some_Bank/adapter.py
+# (or:  cp banks/HDFC_Bank/adapter.py banks/Some_Bank/adapter.py  and edit)
 
-# 3. Edit banks/HDFC_Bank/adapter.py:
-#    Implement render_page() to click HDFC's custom dropdown and return
-#    list[(year_label, html_bytes)]. See banks/README.md for the contract.
+# 3. Implement render_page() — see banks/README.md for the contract.
+#    Test it in isolation first; the script at _scratch/probe_hdfc.py is a
+#    good template for one-off page-structure investigation.
 
-# 4. Once the adapter works, backfill
-python3 run.py --mode backfill --bank HDFC_Bank --verbose
+# 4. Once the adapter returns the right blobs, backfill the bank.
+./_scheduler/refresh.sh focus Some_Bank
+./_scheduler/refresh.sh --mode backfill --force
 ```
 
 The engine auto-loads `banks/<Bank>/adapter.py` on every run and routes the
 bank's IR-page scraping through `adapter.render_page` (falling back to the
-generic renderer if the adapter returns `None`/`[]`). See
-[`banks/README.md`](banks/README.md) for the full adapter contract.
+generic renderer if the adapter returns `None`/`[]`). When the adapter does
+return blobs they are **authoritative** — static-HTML scrape is ignored
+even if it found more links, because the adapter's whole reason to exist
+is to filter the page down. See [`banks/README.md`](banks/README.md) for the
+full adapter contract.
 
 ### Register without fetching (rare)
 
@@ -618,6 +653,12 @@ For each bank, every run hits **three** discovery sources and merges results:
    filter by the history window even when filenames have no date in them.
    Annual reports / transcripts are then dropped at classify time per the
    doc-type whitelist — only IP / PR / financial_result survive.
+
+   You can **disable NSE for an individual bank** with `"use_nse": false`
+   in `banks/<Bank>/config.json` — useful when the bank's own IR page is
+   curated, exhaustive, and indexed by a custom adapter (HDFC is the
+   reference case — NSE for HDFC adds ~50 duplicate / off-topic filings
+   that bypass the adapter's filter). Default is `true`.
 
 2. **Bank IR page HTML scraping** — for each `source` URL in
    `banks/<Bank>/config.json`, the engine fetches the page and harvests every

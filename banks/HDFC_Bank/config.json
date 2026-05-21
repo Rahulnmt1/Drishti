@@ -1,0 +1,17 @@
+{
+  "name": "HDFC_Bank",
+  "ticker": "HDFCBANK",
+  "category": "private",
+
+  "_comment_use_nse": "HDFC's IR page is curated + exhaustive (and the adapter filters it down to IP+PR only). NSE adds dozens of duplicate/off-topic filings (earnings-call intimations, BoD meeting notices, analyst-meet schedules) that bypass the adapter. Disable NSE here so the adapter's filter is authoritative.",
+  "use_nse": false,
+
+  "sources": [
+    {
+      "url": "https://www.hdfc.bank.in/about-us/investor-relations",
+      "type_hint": "mixed",
+      "requires_js": true
+    }
+  ]
+}
+

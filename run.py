@@ -311,10 +311,15 @@ def main(argv=None) -> int:
     with open_index(db_path) as index:
         for entry in entries:
             try:
+                # NSE is the AND of (engine-side run switch) AND (per-bank opt-in).
+                # Bank-side defaults to True in the registry; set
+                # `use_nse: false` in banks/<X>/config.json to skip NSE for
+                # banks whose IR page is the authoritative source.
+                effective_use_nse = use_nse_for_run and entry.config.get("use_nse", True)
                 stats = process_bank(
                     bank_cfg=entry.config, kb_root=KB_ROOT, fetcher=fetcher, index=index,
                     history_years=history_years, mode=args.mode,
-                    use_nse=use_nse_for_run,
+                    use_nse=effective_use_nse,
                     nse_warmed=nse_warmed,
                     types_filter=types_filter,
                     doc_types_whitelist=doc_types_whitelist,

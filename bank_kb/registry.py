@@ -165,6 +165,11 @@ def _load_bank_config(path: Path) -> dict:
     # as "inherit global". An explicit list narrows the global whitelist.
     if cfg.get("doc_types") is None:
         cfg.pop("doc_types", None)
+    # use_nse defaults to True; banks whose IR page is curated + exhaustive
+    # (e.g. HDFC) should set this to false to avoid NSE pulling in duplicate
+    # / off-topic filings that the per-bank adapter intentionally excluded.
+    if "use_nse" not in cfg:
+        cfg["use_nse"] = True
     return cfg
 
 

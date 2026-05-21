@@ -208,8 +208,15 @@ def process_bank(*, bank_cfg: dict, kb_root: Path, fetcher: Fetcher, index: Inde
         # If the bank has an `adapter.py` with a `render_page` function, the
         # adapter wins — used for banks (HDFC/ICICI/...) whose custom
         # React/JS pickers the generic renderer can't drive.
+        # Whether the JS path came from a per-bank adapter (authoritative —
+        # adapter intentionally filters the page down) vs the generic
+        # multi-year iterator (best-effort — should yield to a larger
+        # static-HTML scrape if that found more links). When adapter_used
+        # is True, we promote the adapter output OVER static_links no
+        # matter the counts.
         js_segments: list[tuple[str, list[DiscoveredLink]]] = []
         js_total_unique = 0
+        adapter_used = False
         if (requires_js or not static_links) and js_available:
             blobs_with_years = None
             if render_page_override is not None:
@@ -220,6 +227,7 @@ def process_bank(*, bank_cfg: dict, kb_root: Path, fetcher: Fetcher, index: Inde
                         user_agent=fetcher.session.headers.get("User-Agent", ""),
                     )
                     if blobs_with_years:
+                        adapter_used = True
                         log.info("[%s] adapter render_page() returned %d year-view(s) "
                                  "for %s", bank_name, len(blobs_with_years), page_url)
                 except Exception as e:  # noqa: BLE001
@@ -253,10 +261,27 @@ def process_bank(*, bank_cfg: dict, kb_root: Path, fetcher: Fetcher, index: Inde
                         js_segments.append((year_label, year_links))
                         js_total_unique += len(year_links)
 
-        # Use whichever discovery method gave us more unique links — covers
-        # the case where a static-HTML page already exposes everything visible
-        # and we'd rather skip the JS overhead segmentation altogether.
-        if js_total_unique > len(static_links):
+        # Promotion policy:
+        #   - If a bank-specific adapter ran and returned blobs, ALWAYS use
+        #     the adapter output and discard static_links — the adapter's
+        #     filter is the whole point (e.g. HDFC's adapter narrows 68 raw
+        #     anchors to 20 IP+PR). Falling back to static here would
+        #     reintroduce all the noise the adapter just dropped.
+        #   - Otherwise (generic js_fetcher only), use whichever method gave
+        #     more unique links — covers static-HTML pages that expose
+        #     everything without JS, and JS-only pages where static returns
+        #     0.
+        if adapter_used:
+            log.info("[%s] adapter authoritative: %d link(s) across %d year-view(s) "
+                     "(static HTML had %d, ignored) on %s",
+                     bank_name, js_total_unique, len(js_segments),
+                     len(static_links), page_url)
+            for year_label, links in js_segments:
+                seg_name = (f"ir:{page_url}#year={year_label}"
+                            if year_label else f"ir:{page_url}")
+                all_segments.append((seg_name, [(l, type_hint) for l in links]))
+                ir_links_added += len(links)
+        elif js_total_unique > len(static_links):
             log.info("[%s] js render produced %d link(s) across %d year-view(s); "
                      "promoting over %d link(s) from static HTML on %s",
                      bank_name, js_total_unique, len(js_segments),
