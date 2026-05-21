@@ -10,13 +10,10 @@ Two modes:
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import date
 from pathlib import Path
-from typing import Iterable, Optional
 from urllib.parse import unquote, urlparse
 
 from .classify import classify, in_history_window, DocMeta
@@ -29,14 +26,13 @@ from . import nse_source
 
 log = logging.getLogger(__name__)
 
-# Map our doc_type to the folder name under each bank.
+# Map our doc_type to the folder name under each bank. Only the 3 doc_types
+# the engine actually fetches need to be mapped — everything else is rejected
+# at classify time (see `_doc_type_allowed` in process_bank).
 TYPE_TO_FOLDER = {
     "investor_presentation": "investor_presentations",
-    "annual_report": "annual_reports",
-    "transcript": "transcripts",
-    "press_release": "press_releases",
-    "financial_result": "investor_presentations",  # store alongside the deck
-    "other": "press_releases",                      # safest default bucket
+    "press_release":         "press_releases",
+    "financial_result":      "investor_presentations",  # stored alongside the deck
 }
 
 
@@ -76,22 +72,80 @@ def _local_path(kb_root: Path, bank: str, meta: DocMeta, url: str) -> Path:
     return kb_root / bank / folder / fy_dir / base
 
 
+# Built-in engine whitelist — the maximum set of doc_types the engine will
+# ever fetch. settings.json:doc_types_whitelist normally matches this; any
+# per-bank override or CLI filter can only narrow, never expand.
+_BUILTIN_DOC_TYPES = frozenset({"investor_presentation", "press_release", "financial_result"})
+
+
+def _resolve_allowed_types(*, global_whitelist, per_bank, cli_filter) -> set[str]:
+    """Intersection of the engine-wide whitelist, the per-bank narrowing,
+    and the CLI --type filter. Empty inputs are treated as "no constraint".
+
+    The CLI filter uses *folder* names (`investor_presentations`,
+    `press_releases`) while the classifier emits *type* names
+    (`investor_presentation`, `press_release`); we normalize via
+    `TYPE_TO_FOLDER` so the CLI flag keeps working unchanged.
+    """
+    allowed = set(global_whitelist) if global_whitelist else set(_BUILTIN_DOC_TYPES)
+    allowed &= _BUILTIN_DOC_TYPES  # safety: never above the built-in cap
+    if per_bank:
+        allowed &= set(per_bank)
+    if cli_filter:
+        # cli_filter uses folder names; translate back to doc_types. If the
+        # caller asked for a type that's NOT in TYPE_TO_FOLDER (e.g. an
+        # annual_report — no longer supported), the intersection is empty
+        # and nothing is fetched. That's the correct, fail-closed behavior.
+        cli_types = {dt for dt, folder in TYPE_TO_FOLDER.items()
+                     if folder in cli_filter or dt in cli_filter}
+        allowed &= cli_types
+    return allowed
+
+
 def process_bank(*, bank_cfg: dict, kb_root: Path, fetcher: Fetcher, index: Index,
                  history_years: int, mode: str = "backfill",
                  daily_consec_seen_stop: int = 25,
                  use_nse: bool = True, use_js_render: bool = True,
                  nse_warmed: list[bool] | None = None,
-                 types_filter: set[str] | None = None) -> RunStats:
+                 types_filter: set[str] | None = None,
+                 doc_types_whitelist: set[str] | None = None,
+                 render_page_override=None,
+                 classify_link_override=None) -> RunStats:
     """Discover from NSE + IR pages (auto-rendered with Playwright where needed),
     then download + extract + index.
 
-    `nse_warmed` is a shared one-element list used to avoid re-warming NSE
-    cookies for every bank in the same run.
+    Args:
+        bank_cfg: per-bank dict (loaded from banks/<X>/config.json, normalized by
+            bank_kb.registry).
+        types_filter: optional ad-hoc CLI filter (`--type investor_presentations`).
+            Intersected with `doc_types_whitelist`.
+        doc_types_whitelist: engine-wide allowed doc_types (defaults to a hard-coded
+            triple). Anything classified OUTSIDE this set is dropped at discovery time
+            and never downloaded. The per-bank `doc_types` field in config.json,
+            when present, narrows this further but cannot expand it.
+        render_page_override: optional per-bank callable, signature
+            `(url, *, history_years, user_agent) -> list[tuple[str, bytes]]`.
+            If returns [] or None, the generic js_fetcher is used.
+        classify_link_override: optional per-bank callable, signature
+            `(url, anchor_text, default_meta) -> DocMeta | None`. Returning None
+            keeps the default classification.
+        nse_warmed: a shared one-element list used to avoid re-warming NSE
+            cookies for every bank in the same run.
     """
     bank_name = bank_cfg["name"]
     bank_category = bank_cfg.get("category", "unknown")
     stats = RunStats(bank=bank_name)
     log.info("[%s] starting (%s mode)", bank_name, mode)
+
+    # Resolve the effective doc-type allowlist for THIS bank:
+    #   global whitelist  AND  per-bank narrowing  AND  CLI --type filter.
+    effective_allowed = _resolve_allowed_types(
+        global_whitelist=doc_types_whitelist,
+        per_bank=bank_cfg.get("doc_types"),
+        cli_filter=types_filter,
+    )
+    log.info("[%s] doc_type allowlist for this run: %s",
+             bank_name, sorted(effective_allowed))
 
     # Links are grouped into ordered, named "segments" instead of one flat list.
     # A segment is a scope inside which daily-mode's "stop after N consecutive
@@ -150,14 +204,36 @@ def process_bank(*, bank_cfg: dict, kb_root: Path, fetcher: Fetcher, index: Inde
         # investor presentations / press releases, etc.), it iterates every
         # option inside the history window so we get the full 5-year backfill
         # in one pass — no manual per-year URLs required.
+        #
+        # If the bank has an `adapter.py` with a `render_page` function, the
+        # adapter wins — used for banks (HDFC/ICICI/...) whose custom
+        # React/JS pickers the generic renderer can't drive.
         js_segments: list[tuple[str, list[DiscoveredLink]]] = []
         js_total_unique = 0
         if (requires_js or not static_links) and js_available:
-            blobs_with_years = js_fetcher.fetch_rendered_html_iter_years(
-                page_url,
-                user_agent=fetcher.session.headers.get("User-Agent", ""),
-                history_years=history_years,
-            )
+            blobs_with_years = None
+            if render_page_override is not None:
+                try:
+                    blobs_with_years = render_page_override(
+                        page_url,
+                        history_years=history_years,
+                        user_agent=fetcher.session.headers.get("User-Agent", ""),
+                    )
+                    if blobs_with_years:
+                        log.info("[%s] adapter render_page() returned %d year-view(s) "
+                                 "for %s", bank_name, len(blobs_with_years), page_url)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("[%s] adapter render_page() failed for %s: %s — "
+                                "falling back to generic renderer",
+                                bank_name, page_url, e)
+                    stats.errors.append(f"adapter_render {page_url}: {e}")
+                    blobs_with_years = None
+            if not blobs_with_years:
+                blobs_with_years = js_fetcher.fetch_rendered_html_iter_years(
+                    page_url,
+                    user_agent=fetcher.session.headers.get("User-Agent", ""),
+                    history_years=history_years,
+                )
             if blobs_with_years:
                 stats.js_render_used += 1
                 # Dedup links *within this page only* (across the year-views),
@@ -233,6 +309,20 @@ def process_bank(*, bank_cfg: dict, kb_root: Path, fetcher: Fetcher, index: Inde
         consec_seen = 0
         for link, hint in seg_links:
             meta = classify(link.url, link.anchor_text, hint)
+            # Per-bank classification override (banks/<X>/adapter.py:classify_link)
+            # gets to override generic classification — used for banks with
+            # weird filename conventions the regex-based classifier misreads.
+            if classify_link_override is not None:
+                try:
+                    custom = classify_link_override(link.url, link.anchor_text, meta)
+                    if custom is not None:
+                        meta = custom
+                except Exception as e:  # noqa: BLE001
+                    log.warning("[%s] adapter classify_link() failed for %s: %s — "
+                                "keeping default classification",
+                                bank_name, link.url, e)
+                    stats.errors.append(f"adapter_classify {link.url}: {e}")
+
             # If discover gave us an authoritative filing_date (NSE), use it
             # to backfill the meta and to drive the history-window check.
             # This is how we reliably exclude old filings whose URLs have no
@@ -249,10 +339,14 @@ def process_bank(*, bank_cfg: dict, kb_root: Path, fetcher: Fetcher, index: Inde
             if not in_history_window(meta, history_years):
                 continue
 
-            # Optional type filter — if set, only download docs the classifier
-            # labeled with one of the requested types. Counts as a separate
-            # skip category (not failure) so summaries are clear.
-            if types_filter is not None and meta.doc_type not in types_filter:
+            # Doc-type allowlist enforcement. effective_allowed combines:
+            #   - settings.json:doc_types_whitelist  (engine-wide)
+            #   - bank_cfg.doc_types                 (per-bank narrowing)
+            #   - types_filter                       (CLI --type for one run)
+            # Anything outside this set is dropped here — never downloaded,
+            # never stored. This is what enforces "only IP + PR + financial_result"
+            # at the data-flow level.
+            if meta.doc_type not in effective_allowed:
                 stats.skipped_by_type += 1
                 continue
 
@@ -315,7 +409,3 @@ def process_bank(*, bank_cfg: dict, kb_root: Path, fetcher: Fetcher, index: Inde
         stats.js_render_used,
     )
     return stats
-
-
-def load_config(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))

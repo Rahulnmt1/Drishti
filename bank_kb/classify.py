@@ -3,7 +3,7 @@
 We look at three signals:
     1. URL path & filename (most reliable).
     2. Anchor text from the IR page (good for press releases).
-    3. type_hint from banks_config.json for the source page (fallback).
+    3. type_hint from banks/<Bank>/config.json for the source page (fallback).
 
 Indian banks report on a fiscal year running April–March. Quarter names you'll see
 in filenames: Q1FY24, Q2FY25, Q3-FY24, QFY-2024, FY24, FY2024, Q4_2024 etc.
@@ -48,7 +48,7 @@ DOC_TYPES = ("investor_presentation", "annual_report", "transcript", "press_rele
 
 
 # When the filename/anchor don't match any pattern, we *may* fall back to the
-# page-level type_hint configured in banks_config.json. But IR pages frequently
+# page-level type_hint configured in banks/<Bank>/config.json. But IR pages frequently
 # include unrelated PDFs (footer links: disclaimers, vendor lists, policies,
 # books-of-records, etc.) which would otherwise be silently mislabeled as
 # whatever the page's hint says. We require the URL itself to *look like* it

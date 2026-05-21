@@ -7,7 +7,7 @@ URLs, and let the classifier decide the document type.
 
 If a page is heavily client-rendered (rare for IR pages but happens on Yes Bank /
 Union Bank), the engine logs a warning and the user can re-run after adding a
-direct PDF index URL to banks_config.json — or run that specific bank through
+direct PDF index URL to banks/<Bank>/config.json — or run that specific bank through
 Claude in Chrome to harvest links.
 """
 

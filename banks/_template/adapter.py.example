@@ -1,0 +1,33 @@
+# Rename this to `adapter.py` (drop the .example) ONLY if the generic engine
+# path can't handle this bank. The vast majority of banks won't need one.
+#
+# Define one or both of the following functions. Anything you don't define is
+# inherited from the generic engine code.
+
+from __future__ import annotations
+
+
+def render_page(url, *, history_years, user_agent):
+    """OPTIONAL OVERRIDE for bank_kb.js_fetcher.fetch_rendered_html_iter_years.
+
+    Use when the generic renderer (which iterates native <select> year
+    dropdowns) can't drive this bank's UI — e.g. React-rendered custom
+    dropdowns, hover menus, "Load more" infinite scroll.
+
+    Return list[tuple[str, bytes]] — one (year_label, html_blob) tuple per
+    fiscal year inside the history window. Returning [] or None falls back
+    to the generic renderer.
+    """
+    return None
+
+
+def classify_link(url, anchor_text, default_meta):
+    """OPTIONAL OVERRIDE for bank_kb.classify.classify.
+
+    Use when this bank has filename conventions the generic classifier
+    misreads (e.g. half-year reports named "H1FY25.pdf").
+
+    Receives the default classification (bank_kb.classify.DocMeta). Return
+    a new DocMeta to override, or None to accept the default.
+    """
+    return None

@@ -1,0 +1,18 @@
+{
+  "_comment": "Skeleton config for a new bank. Copy this folder to banks/<BankName>/ and edit fields below. Anything starting with '_' is a comment and ignored by the loader.",
+
+  "name": "Template_Bank",
+  "ticker": "",
+  "category": "private",
+
+  "sources": [
+    {
+      "url": "https://www.example.bank.in/investor-relations",
+      "type_hint": "investor_presentation",
+      "requires_js": false
+    }
+  ],
+
+  "_comment_doc_types": "Optional. Per-bank narrowing of settings.json:doc_types_whitelist. Omit to inherit the global list (which is currently {investor_presentation, press_release, financial_result}). To fetch only one type for this bank, list just that type here.",
+  "doc_types": null
+}

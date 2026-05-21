@@ -123,18 +123,26 @@ re-running it usually works — the installer is restart-safe and resumes.
 
 ---
 
-## 4. Recreate the per-bank folder skeleton
+## 4. Register the banks you want to track
 
-`banks_config.json` *is* in the repo, so the engine knows the 20 banks
-already. It just hasn't materialized their folders on the new disk yet.
+The repo ships with **zero registered banks**. You add them one at a time
+via `add_bank.py`, which scaffolds `banks/<Name>/{config.json,notes.md}`
+from the template and (optionally) runs the 5-year backfill immediately.
 
 ```bash
-python3 run.py --sync-structure
+# Example: add Axis Bank and immediately backfill 5 years.
+python3 add_bank.py Axis_Bank \
+    --ticker AXISBANK --category private \
+    --source 'https://www.axisbank.com/shareholders-corner/other-information/investor-presentations' investor_presentation \
+    --source 'https://www.axisbank.com/shareholders-corner/financial-information-and-others/press-releases' press_release \
+    --requires-js --no-edit
 ```
 
-This creates `../HDFC_Bank/{investor_presentations,annual_reports,...}/`,
-`../Axis_Bank/...`, etc. — empty folders next to `_engine/`. Costs zero
-network, takes <1 second.
+If you previously checked in a bank's workspace under `banks/<Bank>/`, just
+running `./_scheduler/refresh.sh --sync-structure` will recreate that
+bank's corpus folders (`KnowledgeBase/<Bank>/{investor_presentations,
+press_releases,extracted_text}/`) on the new disk. Costs zero network,
+takes <1 second.
 
 ---
 
@@ -142,31 +150,32 @@ network, takes <1 second.
 
 ### Path A — cold rebuild (no old data carried over)
 
-This is the default path. It pulls 5 years of history for every configured
-bank and rebuilds the SQLite index from scratch.
+This is the default path. Pick a bank you've onboarded in step 4, then
+backfill it:
 
 ```bash
-python3 run.py --mode backfill --verbose
+./_scheduler/refresh.sh focus Axis_Bank
+./_scheduler/refresh.sh --mode backfill
 ```
 
-Expect:
+Or run every registered bank in one shot:
 
-- 500 – 1,500 PDFs total (varies with each bank's press-release verbosity)
-- 1 – 4 GB of disk used in the sibling `KnowledgeBase/<Bank>/` folders
-- 1 – 3 hours wall time on a residential connection (the engine sleeps 2 s
+```bash
+./_scheduler/refresh.sh --all-banks --mode backfill
+```
+
+Expect (per bank):
+
+- 20 – 80 PDFs typical (varies with each bank's press-release verbosity)
+- 100 – 500 MB of disk used in the sibling `KnowledgeBase/<Bank>/` folder
+- 2 – 10 minutes on a residential connection (the engine sleeps 2 s
   between requests to be polite — adjust `request_delay_seconds` in
-  `banks_config.json` if you have a faster pipe and want to be aggressive)
+  `settings.json` if you have a faster pipe and want to be aggressive)
 
 Tip: run it inside `caffeinate` so the Mac doesn't sleep mid-run:
 
 ```bash
-caffeinate -is python3 run.py --mode backfill --verbose
-```
-
-Or, to pilot on one bank first before committing to the full run:
-
-```bash
-python3 run.py --mode backfill --bank Axis_Bank --verbose
+caffeinate -is ./_scheduler/refresh.sh --all-banks --mode backfill
 ```
 
 ### Path B — warm migration (data carried over from old laptop)
@@ -243,10 +252,12 @@ source ~/.zshrc
 Then:
 
 ```bash
-kb                                                # daily, all banks
-kb --bank Axis_Bank                               # one bank
-kb --mode backfill --bank Yes_Bank                # backfill one bank
-kb --status                                       # show last run + corpus stats
+kb focus Axis_Bank                                # set the active bank (persistent)
+kb                                                # daily, focused bank
+kb --mode backfill                                # backfill, focused bank
+kb --bank Yes_Bank --mode backfill                # one-off override of focus
+kb --all-banks                                    # ignore focus, run every bank
+kb --status                                       # show focus + last run + corpus stats
 ```
 
 ---
@@ -326,16 +337,20 @@ python3 run.py --mode daily --verbose
 Expected `--status` output looks roughly like:
 
 ```
-Index:           /Users/<you>/Documents/RWork/Banking_Data/KnowledgeBase/_engine/kb_index.sqlite
+Engine root:    /Users/<you>/Documents/RWork/Banking_Data/KnowledgeBase/_engine
+KB root:        /Users/<you>/Documents/RWork/Banking_Data/KnowledgeBase
+Focused bank:   Axis_Bank  [file (.kb_focus)]
+Registered:     3 bank(s) — ['Axis_Bank', 'HDFC_Bank', 'ICICI_Bank']
+
+Index:           .../_engine/kb_index.sqlite  (12.4 MB)
 Last run:        2026-05-20 11:00 IST  (0.1h ago)
-Documents indexed: 6108
-Banks tracked:     20
+Documents indexed: 187
+Doc-type whitelist (settings.json): investor_presentation, press_release, financial_result
 
 By document type:
-  other                    4202
-  investor_presentation    741
-  press_release            382
-  ...
+  investor_presentation    98
+  press_release            71
+  financial_result         18
 ```
 
 ---

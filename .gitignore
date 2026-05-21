@@ -13,6 +13,11 @@ venv/
 # Local engine state — regenerable by `refresh.sh` / `run.py`
 kb_index.sqlite
 _logs/
+_logs_archive/
+
+# Per-shell "currently working on bank X" focus — written by
+# `./_scheduler/refresh.sh focus <Bank>`. Local state, not shared across machines.
+.kb_focus
 
 # Editor / IDE local state
 .vscode/

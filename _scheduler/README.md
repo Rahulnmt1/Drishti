@@ -11,19 +11,27 @@ See `_engine/architecture.svg` for the diagram.
 ```bash
 cd /Users/rahul.choubey/Documents/RWork/Banking_Data/KnowledgeBase/_engine/_scheduler
 
-# Standard daily / backfill
-./refresh.sh                                                  # daily, all banks, all types
-./refresh.sh --bank Kotak_Mahindra_Bank                       # single bank, daily mode
+# Focus — pick the bank you're actively working on (persists across shells)
+./refresh.sh focus HDFC_Bank                                  # set focus
+./refresh.sh focus                                            # show focus
+./refresh.sh unfocus                                          # clear focus
+
+# Standard daily / backfill — uses focus if set, otherwise all registered banks
+./refresh.sh                                                  # daily, focused bank (or all)
+./refresh.sh --bank Kotak_Mahindra_Bank                       # explicit override of focus
 ./refresh.sh --mode backfill --bank Yes_Bank                  # 5-yr history for one bank
+./refresh.sh --all-banks --mode daily                         # force every registered bank
+
+# Per-shell focus via env var (overrides .kb_focus for one terminal)
+KB_FOCUS=Axis_Bank ./refresh.sh --mode daily
 
 # Narrow to one (or several) document categories
-./refresh.sh --type annual_reports                            # ARs only, every bank
+./refresh.sh --type press_releases                            # PRs only, focused bank
 ./refresh.sh --bank HDFC_Bank --type investor_presentations   # HDFC decks only
 ./refresh.sh --mode backfill --bank ICICI_Bank --type press_releases
-./refresh.sh --type annual_reports --type transcripts         # both
-./refresh.sh --type annual_reports,transcripts                # same, comma form
+./refresh.sh --type investor_presentations,press_releases     # both, comma form
 
-# Pin the source URL(s) — bypass banks_config for that bank, skip NSE
+# Pin the source URL(s) — bypass banks/<X>/config.json sources, skip NSE
 ./refresh.sh --bank Kotak_Mahindra_Bank \
     --url https://www.kotak.bank.in/en/investor-relations/financial-results.html
 ./refresh.sh --mode backfill --bank IDFC_First_Bank --type press_releases \
@@ -32,21 +40,23 @@ cd /Users/rahul.choubey/Documents/RWork/Banking_Data/KnowledgeBase/_engine/_sche
 ./refresh.sh --bank Yes_Bank --url URL_1,URL_2                # same, comma form
 
 # Utilities
-./refresh.sh --status                                         # last-run state + corpus stats
-./refresh.sh --sync-structure                                 # create folders for any new banks
+./refresh.sh --status                                         # focus + last-run state + corpus stats
+./refresh.sh --sync-structure                                 # create folders for any registered bank
 ```
 
 Valid `--type` values (folder names from `bank_kb/structure.py:SUBFOLDERS`):
-`investor_presentations`, `annual_reports`, `transcripts`, `press_releases`,
-`financial_results`. Singular forms (`annual_report`, `transcript`, …) and
-shorthand (`ar`, `pr`, `presentations`) are accepted too.
+`investor_presentations`, `press_releases`, `financial_results`. Singular
+forms (`investor_presentation`, `press_release`, `financial_result`) and
+shorthand (`ip`, `pr`, `fr`, `presentations`) are accepted too. Any other
+classifier output (annual_report, transcript, "other") is dropped at
+classify time per `settings.json:doc_types_whitelist`.
 
-`--url` requires `--bank` (the engine needs to know whose folders the
-downloads belong in). When set, it **replaces** the bank's configured
-sources entirely and **skips NSE discovery** for that run — useful for
-testing a candidate URL before committing it to `banks_config.json`, or
-for pinning to a single archive page while debugging. The PDFs still land
-in the normal `<Bank>/<type>/FY<N>/` folders and the classifier still runs.
+`--url` requires `--bank` or an active focus. When set, it **replaces** the
+bank's configured sources entirely and **skips NSE discovery** for that run
+— useful for testing a candidate URL before committing it to
+`banks/<Bank>/config.json`, or for pinning to a single archive page while
+debugging. The PDFs still land in the normal `<Bank>/<type>/FY<N>/` folders
+and the classifier still runs.
 
 `refresh.sh`:
 
@@ -59,8 +69,9 @@ Set an alias once:
 
 ```bash
 alias kb='/Users/rahul.choubey/Documents/RWork/Banking_Data/KnowledgeBase/_engine/_scheduler/refresh.sh'
-# kb                           # daily, all banks
-# kb --bank Kotak_Mahindra_Bank
+# kb focus HDFC_Bank         # set focus
+# kb                         # daily, focused bank
+# kb --mode backfill         # backfill, focused bank
 # kb --status
 ```
 
@@ -132,8 +143,8 @@ enabled, is purely a passive reader of the logs the Mac produces.
 
 ## Adding banks works without touching any of this
 
-`run.py` calls `ensure_all_banks_structure(cfg, kb_root)` at startup, so
-whether you used `add_bank.py` or hand-edited `banks_config.json`, the
-per-bank folder skeleton appears on the next `refresh.sh` run — and that
-new bank is fetched on the same run. No script in this folder needs
-editing when you add a bank.
+`run.py` calls `ensure_bank_structure()` for every registered bank at
+startup, so whether you used `add_bank.py` or hand-created
+`banks/<Bank>/config.json` directly, the per-bank corpus folders appear on
+the next `refresh.sh` run — and that new bank is fetched on the same run.
+No script in this folder needs editing when you add a bank.

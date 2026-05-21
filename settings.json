@@ -1,0 +1,18 @@
+{
+  "_comment_1": "GLOBAL engine settings only — anything that's the same across every bank.",
+  "_comment_2": "Per-bank specifics (URLs, ticker, doc_types, requires_js, etc.) live in banks/<Bank>/config.json.",
+
+  "history_years": 5,
+  "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "request_delay_seconds": 2.0,
+  "request_timeout_seconds": 45,
+  "max_pdf_size_mb": 80,
+
+  "doc_types_whitelist": [
+    "investor_presentation",
+    "press_release",
+    "financial_result"
+  ],
+
+  "_comment_doc_types": "Engine-wide whitelist. Anything the classifier labels OUTSIDE this set is dropped at discovery time (never downloaded, never stored). A per-bank config.json may further narrow this (but cannot expand it)."
+}

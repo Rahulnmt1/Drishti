@@ -31,10 +31,9 @@ DB_PATH = HERE.parent / "_engine" / "kb_index.sqlite"
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Search the banking knowledge base.")
     p.add_argument("query", nargs="?", default="", help="FTS5 query string")
-    p.add_argument("--bank", help="Bank name from banks_config.json (e.g. HDFC_Bank)")
+    p.add_argument("--bank", help="Bank name from banks/<X>/config.json (e.g. HDFC_Bank)")
     p.add_argument("--type", dest="doc_type",
-                   choices=("investor_presentation", "annual_report", "transcript",
-                            "press_release", "financial_result", "other"))
+                   choices=("investor_presentation", "press_release", "financial_result"))
     p.add_argument("--topic", help="Topic flag (ai_ml, digital_banking, channels_integration, ...)")
     p.add_argument("--fy", type=int, help="Fiscal year, e.g. 2025 (FY25 = Apr 2024–Mar 2025)")
     p.add_argument("--limit", type=int, default=25)

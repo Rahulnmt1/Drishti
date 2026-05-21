@@ -1,39 +1,39 @@
 #!/usr/bin/env python3
-"""Add a new bank (or any tracked customer / entity) to the knowledge base.
+"""Onboard a new bank (or any tracked entity) to the knowledge base.
 
-By default this script does everything in one shot:
-  1. Creates the folder structure under KnowledgeBase/<Name>/.
-  2. Appends/merges an entry in banks_config.json.
-  3. Immediately runs the full 5-year backfill — NSE corporate-announcements +
-     IR-page scrape + Playwright (if needed) → download → text extract → index.
+This script does two things:
 
-So a single command both onboards the customer and downloads all their data.
-Pass --no-backfill if you want to register the entry without fetching yet
-(useful when you're configuring offline or testing the script).
+  1. Scaffolds `banks/<Name>/` from `banks/_template/`:
+       - config.json   (you fill in ticker + URLs)
+       - notes.md      (you'll grow this as you learn the bank's quirks)
+       - adapter.py    (NOT copied by default — only needed for tricky banks)
+     Then opens config.json in your $EDITOR (unless --no-edit) so you can
+     fill in ticker, category, and source URLs immediately.
 
-Use cases:
+  2. (Optional, default ON) Runs the 5-year backfill immediately:
+     NSE corporate-announcements + IR-page scrape + Playwright (if requested)
+     → download → text extract → SQLite index. Pass --no-backfill to skip.
 
-    # New private-sector bank, NSE-listed — pulls 5 years of filings:
-    python3 add_bank.py --name South_Indian_Bank --ticker SOUTHBANK \
-        --category private \
-        --source "https://www.southindianbank.com/investor-relations" mixed
+The bank's per-bank `config.json` is the source of truth. There is no
+monolithic banks_config.json anymore.
 
-    # NBFC not on NSE — IR-page scraping only:
-    python3 add_bank.py --name Bajaj_Finance --category nbfc \
-        --source "https://www.bajajfinserv.in/investor-relations" mixed
+Examples:
+    # Interactive: scaffold + open in $EDITOR + backfill
+    python3 add_bank.py HDFC_Bank
 
-    # Insurance customer, NSE-listed, with multiple IR landing pages (JS-rendered):
-    python3 add_bank.py --name HDFC_Life --ticker HDFCLIFE --category insurance \
-        --source "https://www.hdfclife.com/investor-relations/financials" mixed \
-        --source "https://www.hdfclife.com/investor-relations/annual-reports" annual_report \
+    # Fully non-interactive
+    python3 add_bank.py HDFC_Bank \\
+        --ticker HDFCBANK --category private \\
+        --source 'https://www.hdfcbank.com/personal/about-us/investor-relations' \\
         --requires-js
 
-    # Register-only, don't backfill yet:
-    python3 add_bank.py --name X_Bank --ticker XBANK --category private \
-        --source "https://www.x.com/ir" mixed --no-backfill
+    # Scaffold only — don't open editor, don't backfill (good for CI/tests)
+    python3 add_bank.py South_Indian_Bank --no-edit --no-backfill \\
+        --ticker SOUTHBANK --category private \\
+        --source 'https://www.southindianbank.com/investor-relations'
 
-Idempotent: re-running with the same name merges new sources into the existing
-entry. Use --replace to clobber it instead.
+Idempotent: re-running for an existing bank merges new --source entries into
+the existing config.json. Use --replace to clobber it instead.
 """
 
 from __future__ import annotations
@@ -41,101 +41,125 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
+import shutil
+import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
+
 
 HERE = Path(__file__).resolve().parent           # KnowledgeBase/_engine/
 KB_ROOT = HERE.parent                             # KnowledgeBase/
-CONFIG_PATH = HERE / "banks_config.json"
-LOG_DIR = HERE / "_logs"                          # KnowledgeBase/_engine/_logs/
+BANKS_DIR = HERE / "banks"
+TEMPLATE_DIR = BANKS_DIR / "_template"
+LOG_DIR = HERE / "_logs"
 
-# bank_kb.structure is the single source of truth for the per-bank folder
-# skeleton. Both add_bank.py and run.py go through it, so changing SUBFOLDERS
-# in one place propagates everywhere.
 from bank_kb.structure import SUBFOLDERS, ensure_bank_structure  # noqa: E402
 
 
 def _slug(name: str) -> str:
-    """Replace spaces and unfriendly chars with underscores."""
+    """Folder-safe slug (preserves underscores)."""
     return "".join(ch if ch.isalnum() else "_" for ch in name).strip("_")
 
 
-def _load_config() -> dict:
-    return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+# ---------------------------------------------------------------------------
+# Scaffold a banks/<Name>/ folder from banks/_template/
+# ---------------------------------------------------------------------------
+
+def _scaffold(name: str, replace: bool) -> Path:
+    """Create banks/<name>/ from banks/_template/. Returns the folder path.
+    Does NOT clobber existing files unless --replace is set.
+    """
+    target = BANKS_DIR / name
+    if target.exists() and not replace:
+        # Merge mode: ensure required files exist, don't overwrite anything.
+        if not (target / "config.json").exists():
+            shutil.copy(TEMPLATE_DIR / "config.json", target / "config.json")
+            print(f"  + created missing {target.name}/config.json from template")
+        if not (target / "notes.md").exists():
+            shutil.copy(TEMPLATE_DIR / "notes.md", target / "notes.md")
+            print(f"  + created missing {target.name}/notes.md from template")
+        return target
+    if target.exists() and replace:
+        print(f"  ! --replace: removing existing {target}")
+        shutil.rmtree(target)
+    target.mkdir(parents=True, exist_ok=False)
+    # Copy template files except .example stubs (those are docs, not runtime).
+    for src in sorted(TEMPLATE_DIR.iterdir()):
+        if src.name.endswith(".example"):
+            continue
+        shutil.copy(src, target / src.name)
+    print(f"  + scaffolded {target} from {TEMPLATE_DIR.name}/")
+    return target
 
 
-def _save_config(cfg: dict) -> None:
-    CONFIG_PATH.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+def _merge_config(bank_folder: Path, *, name: str, ticker: str | None,
+                  category: str | None, sources: list[tuple[str, str]],
+                  requires_js: bool) -> dict:
+    """Read banks/<X>/config.json, apply CLI overrides, write back. Returns the dict."""
+    path = bank_folder / "config.json"
+    cfg = json.loads(path.read_text(encoding="utf-8"))
+
+    # Strip template comment keys before writing back (they're informational).
+    cfg = {k: v for k, v in cfg.items() if not k.startswith("_")}
+
+    cfg["name"] = name
+    if ticker is not None:
+        cfg["ticker"] = ticker
+    if category:
+        cfg["category"] = category
+    cfg.setdefault("category", "other")
+    cfg.setdefault("ticker", "")
+
+    # Drop the template's placeholder source (example.bank.in) before merging
+    # — it exists only so the JSON validates as a non-empty list; it's never
+    # a real source.
+    existing = [s for s in (cfg.get("sources") or [])
+                if isinstance(s, dict) and "example.bank.in" not in (s.get("url") or "")]
+    if sources:
+        existing_urls = {s.get("url") for s in existing}
+        for url, hint in sources:
+            if url in existing_urls:
+                continue
+            entry = {"url": url, "type_hint": hint or "mixed"}
+            if requires_js:
+                entry["requires_js"] = True
+            existing.append(entry)
+            existing_urls.add(url)
+    cfg["sources"] = existing
+
+    # Normalize doc_types: drop None / placeholder
+    if cfg.get("doc_types") in (None, [], "null"):
+        cfg.pop("doc_types", None)
+
+    path.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    return cfg
 
 
-def add_bank(*, name: str, ticker: str | None, category: str,
-             sources: list[tuple[str, str]], requires_js: bool,
-             seed_urls: list[str], replace: bool) -> int:
-    """Return 0 on success, non-zero on error."""
-    safe_name = _slug(name)
-    if safe_name != name:
-        print(f"Note: normalizing name '{name}' -> '{safe_name}' for filesystem safety")
-        name = safe_name
+# ---------------------------------------------------------------------------
+# Optional: open config.json in $EDITOR for the user to finish
+# ---------------------------------------------------------------------------
 
-    # 1. Create folder structure (idempotent — shared with run.py).
-    bank_dir = KB_ROOT / name
-    ensure_bank_structure(name, KB_ROOT)
-    print(f"✓ Folders ready: {bank_dir}/{{{','.join(SUBFOLDERS)}}}")
+def _open_in_editor(path: Path) -> None:
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
+    if not editor:
+        print(f"  i  $EDITOR not set — edit this file manually before backfilling:")
+        print(f"        {path}")
+        return
+    print(f"  → opening {path} in {editor}")
+    try:
+        subprocess.run([editor, str(path)], check=False)
+    except Exception as e:  # noqa: BLE001
+        print(f"  ! failed to launch {editor}: {e}")
+        print(f"    edit manually: {path}")
 
-    # 2. Update config.
-    cfg = _load_config()
-    existing_idx = next((i for i, b in enumerate(cfg["banks"]) if b["name"] == name), None)
-    entry: dict = {
-        "name": name,
-        "ticker": ticker or "",
-        "category": category,
-        "sources": [
-            {"url": url, "type_hint": hint, **({"requires_js": True} if requires_js else {})}
-            for url, hint in sources
-        ],
-    }
-    if seed_urls:
-        entry["seed_urls"] = [{"url": u, "type_hint": "mixed"} for u in seed_urls]
 
-    if existing_idx is not None:
-        if not replace:
-            # Merge: union sources & seed_urls, keep existing fields if not provided.
-            old = cfg["banks"][existing_idx]
-            old_source_urls = {s["url"] for s in old.get("sources", [])}
-            for s in entry["sources"]:
-                if s["url"] not in old_source_urls:
-                    old.setdefault("sources", []).append(s)
-            for s in entry.get("seed_urls", []):
-                if s["url"] not in {x["url"] for x in old.get("seed_urls", [])}:
-                    old.setdefault("seed_urls", []).append(s)
-            if ticker:
-                old["ticker"] = ticker
-            if category and not old.get("category"):
-                old["category"] = category
-            cfg["banks"][existing_idx] = old
-            print(f"✓ Merged into existing config entry for '{name}'")
-        else:
-            cfg["banks"][existing_idx] = entry
-            print(f"✓ Replaced existing config entry for '{name}'")
-    else:
-        cfg["banks"].append(entry)
-        print(f"✓ Added new config entry for '{name}'")
-
-    _save_config(cfg)
-
-    if ticker:
-        print(f"  NSE filings will be pulled automatically using ticker '{ticker}'.")
-    else:
-        print("  No NSE ticker provided — discovery will rely on the IR sources alone.")
-    return 0
-
+# ---------------------------------------------------------------------------
+# Backfill — invoke the same pipeline run.py uses, in-process, for one bank
+# ---------------------------------------------------------------------------
 
 def _run_backfill_for(name: str, verbose: bool = True) -> int:
-    """Invoke the same pipeline run.py would, for a single bank, in-process.
-
-    Imported lazily so `add_bank.py --no-backfill` works even when the engine's
-    runtime deps aren't installed yet.
-    """
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -144,26 +168,34 @@ def _run_backfill_for(name: str, verbose: bool = True) -> int:
     log = logging.getLogger("add_bank")
     log.info("Starting backfill for %s", name)
 
-    from datetime import datetime
     from bank_kb.fetcher import Fetcher
     from bank_kb.indexer import open_index
-    from bank_kb.orchestrator import load_config, process_bank
+    from bank_kb.orchestrator import process_bank
+    from bank_kb.registry import (adapter_classify_link, adapter_render_page,
+                                  load_all_banks, load_settings)
 
-    cfg = load_config(CONFIG_PATH)
-    settings = cfg.get("settings", {})
-    bank_cfg = next((b for b in cfg["banks"] if b["name"] == name), None)
-    if not bank_cfg:
-        log.error("Bank %r missing from config after add — aborting backfill", name)
+    settings = load_settings(HERE)
+    entries = load_all_banks(HERE, only=name)
+    if not entries:
+        log.error("Bank %r not found after scaffold — aborting backfill", name)
+        return 2
+    entry = entries[0]
+
+    if not entry.config.get("sources"):
+        log.error("Bank %r has no sources configured yet. Edit %s and re-run with:\n"
+                  "    python3 run.py --mode backfill --bank %s --verbose",
+                  name, entry.folder / "config.json", name)
         return 2
 
     fetcher = Fetcher(
-        user_agent=settings.get("user_agent", "BankKBBot/1.0"),
-        request_delay_seconds=settings.get("request_delay_seconds", 2.0),
-        request_timeout_seconds=settings.get("request_timeout_seconds", 45),
-        max_pdf_size_mb=settings.get("max_pdf_size_mb", 80),
+        user_agent=settings["user_agent"],
+        request_delay_seconds=settings["request_delay_seconds"],
+        request_timeout_seconds=settings["request_timeout_seconds"],
+        max_pdf_size_mb=settings["max_pdf_size_mb"],
     )
-    history_years = settings.get("history_years", 5)
-    db_path = KB_ROOT / "_engine" / "kb_index.sqlite"
+    history_years = settings["history_years"]
+    doc_types_whitelist = set(settings["doc_types_whitelist"])
+    db_path = HERE / "kb_index.sqlite"
 
     nse_warmed = [False]
     summary = {"mode": "backfill_via_add_bank", "bank": name,
@@ -171,9 +203,12 @@ def _run_backfill_for(name: str, verbose: bool = True) -> int:
     with open_index(db_path) as index:
         try:
             stats = process_bank(
-                bank_cfg=bank_cfg, kb_root=KB_ROOT, fetcher=fetcher, index=index,
+                bank_cfg=entry.config, kb_root=KB_ROOT, fetcher=fetcher, index=index,
                 history_years=history_years, mode="backfill",
                 nse_warmed=nse_warmed,
+                doc_types_whitelist=doc_types_whitelist,
+                render_page_override=adapter_render_page(entry),
+                classify_link_override=adapter_classify_link(entry),
             )
             summary.update(stats.as_dict())
         except Exception as e:  # noqa: BLE001
@@ -195,6 +230,7 @@ def _run_backfill_for(name: str, verbose: bool = True) -> int:
     print(f"  in 5y window   : {summary.get('in_window', 0)}")
     print(f"  downloaded     : {summary.get('new_downloads', 0)}")
     print(f"  skipped (seen) : {summary.get('skipped_existing', 0)}")
+    print(f"  skipped_by_type: {summary.get('skipped_by_type', 0)}")
     print(f"  failures       : dl={summary.get('download_failures', 0)} "
           f"ex={summary.get('extract_failures', 0)}")
     print(f"  log file       : {log_path}")
@@ -202,56 +238,105 @@ def _run_backfill_for(name: str, verbose: bool = True) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(description="Onboard a new bank/customer to the KB.")
-    p.add_argument("--name", required=True,
-                   help="Folder/config name. Spaces and slashes auto-normalized to '_'.")
+    p = argparse.ArgumentParser(
+        description="Onboard a new bank/entity (creates banks/<Name>/ from the template).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__.split("Examples:", 1)[-1] if "Examples:" in (__doc__ or "") else None,
+    )
+    p.add_argument("name",
+                   help="Folder name for the bank (e.g. HDFC_Bank). Auto-normalized "
+                        "to filesystem-safe characters.")
     p.add_argument("--ticker",
-                   help="NSE ticker (e.g. SOUTHBANK). Omit for unlisted entities.")
+                   help="NSE ticker (e.g. HDFCBANK). Omit for unlisted entities.")
     p.add_argument("--category", default="other",
                    help="Free-form tag (private, public, nbfc, insurance, fintech, ...).")
-    p.add_argument("--source", nargs=2, action="append", metavar=("URL", "TYPE_HINT"),
+    p.add_argument("--source", nargs="+", action="append", metavar="URL [TYPE_HINT]",
                    default=[],
-                   help="IR/press page URL + type hint "
-                        "(investor_presentation|annual_report|transcript|press_release|mixed). "
-                        "Repeat for multiple sources.")
+                   help="IR page URL, optionally with a type hint "
+                        "(investor_presentation|press_release|financial_result|mixed). "
+                        "Repeat for multiple sources. Type hint defaults to 'mixed'.")
     p.add_argument("--requires-js", action="store_true",
                    help="Mark all --source pages as needing Playwright rendering.")
-    p.add_argument("--seed-url", action="append", default=[],
-                   help="Direct PDF URL to seed-import (rare; for one-off backfills).")
     p.add_argument("--replace", action="store_true",
-                   help="If the bank already exists, replace it instead of merging.")
+                   help="If banks/<Name>/ already exists, DELETE IT and re-scaffold from template.")
+    p.add_argument("--no-edit", action="store_true",
+                   help="Don't open config.json in $EDITOR after scaffolding.")
     p.add_argument("--no-backfill", action="store_true",
-                   help="Register the entry only; skip the immediate 5-year backfill.")
-    p.add_argument("--verbose", "-v", action="store_true",
-                   help="Verbose logging during the backfill phase.")
+                   help="Scaffold the bank's folder only; skip the immediate 5-year backfill.")
+    p.add_argument("--verbose", "-v", action="store_true")
     args = p.parse_args(argv)
 
-    if not args.source and not args.ticker:
-        print("ERROR: Provide at least one --source URL or a --ticker for NSE discovery.",
-              file=sys.stderr)
+    name = _slug(args.name)
+    if name != args.name:
+        print(f"Note: normalizing name '{args.name}' -> '{name}' for filesystem safety")
+
+    # Normalize --source values: each --source can be URL or URL TYPE_HINT.
+    sources: list[tuple[str, str]] = []
+    for s in args.source:
+        if len(s) == 1:
+            sources.append((s[0], "mixed"))
+        elif len(s) == 2:
+            sources.append((s[0], s[1]))
+        else:
+            print(f"ERROR: --source takes 1 or 2 values, got {len(s)}: {s}", file=sys.stderr)
+            return 2
+
+    # 1. Scaffold per-bank folder.
+    if not TEMPLATE_DIR.exists():
+        print(f"ERROR: template folder missing at {TEMPLATE_DIR}. "
+              f"Re-clone the repo or restore banks/_template/.", file=sys.stderr)
         return 2
 
-    rc = add_bank(
-        name=args.name, ticker=args.ticker, category=args.category,
-        sources=args.source, requires_js=args.requires_js,
-        seed_urls=args.seed_url, replace=args.replace,
-    )
-    if rc != 0:
-        return rc
+    print(f"Scaffolding {BANKS_DIR}/{name}/")
+    bank_folder = _scaffold(name, replace=args.replace)
 
+    # 2. Merge CLI args into config.json.
+    cfg = _merge_config(bank_folder, name=name, ticker=args.ticker,
+                        category=args.category, sources=sources,
+                        requires_js=args.requires_js)
+    print(f"  + config.json written: ticker={cfg.get('ticker') or '<none>'}, "
+          f"category={cfg.get('category')}, sources={len(cfg.get('sources', []))}")
+
+    # 3. Create the per-bank corpus folders (IP / PR / extracted_text).
+    ensure_bank_structure(name, KB_ROOT)
+    print(f"  + corpus folders ready: {KB_ROOT / name}/{{{','.join(SUBFOLDERS)}}}")
+
+    # 4. Open in editor unless suppressed.
+    if not cfg.get("sources") and not args.no_edit:
+        print()
+        print(f"No --source URLs were passed and config.json has none either.")
+        print(f"Opening {bank_folder / 'config.json'} so you can add at least one source.")
+        _open_in_editor(bank_folder / "config.json")
+        # Re-load after editor close so the backfill phase sees the user's edits.
+        cfg = json.loads((bank_folder / "config.json").read_text(encoding="utf-8"))
+
+    if not cfg.get("ticker"):
+        print("  i  No NSE ticker — discovery will rely on the IR sources alone.")
+
+    # 5. Backfill unless suppressed.
     if args.no_backfill:
         print()
         print("Skipped backfill (--no-backfill). Run it later with:")
-        print(f"  python3 run.py --mode backfill --bank {_slug(args.name)} --verbose")
+        print(f"  python3 run.py --mode backfill --bank {name} --verbose")
+        return 0
+    if not cfg.get("sources"):
+        print()
+        print("No sources configured — cannot backfill. Edit:")
+        print(f"  {bank_folder / 'config.json'}")
+        print("then run:")
+        print(f"  python3 run.py --mode backfill --bank {name} --verbose")
         return 0
 
-    # Default behaviour: download everything for this new customer right now.
     print()
-    print(f"Backfilling {_slug(args.name)} now — this may take a few minutes.")
+    print(f"Backfilling {name} now — this may take a few minutes.")
     print("(Pass --no-backfill if you want to register without fetching.)")
     print()
-    return _run_backfill_for(_slug(args.name), verbose=args.verbose)
+    return _run_backfill_for(name, verbose=args.verbose)
 
 
 if __name__ == "__main__":
