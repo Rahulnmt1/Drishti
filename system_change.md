@@ -262,18 +262,21 @@ kb --status                                       # show focus + last run + corp
 
 ---
 
-## 7. (Optional) Re-enable the daily LaunchAgent
+## 7. (Recommended) Install the daily LaunchAgent
 
-The engine ships with the LaunchAgent **off by default** — you have to
-explicitly install it. If you want the same unattended 08:30 Mon–Fri
-refresh you had on the old Mac:
+The git repo only ships the template + install script; the actual
+LaunchAgent isn't loaded on a fresh clone, so you opt in once on the new
+Mac. The schedule itself is **fixed business policy** (not a knob): every
+day, the agent fires hourly between 10:00 and 15:00 local time, and the
+first fire that succeeds writes a per-day flag so the rest of that day's
+fires no-op in ~30 ms. See
+`_engine/_scheduler/README.md` for the design rationale.
 
 ```bash
 cd ~/Documents/RWork/Banking_Data/KnowledgeBase/_engine/_scheduler
-./install.sh                                       # 08:30 Mon-Fri default
-# ./install.sh --time 07:15                         # custom time
-# ./install.sh --python /opt/homebrew/bin/python3   # custom python
-./status.sh                                        # confirm 'loaded: yes'
+./install.sh                                       # auto-detects python (prefers .venv)
+# ./install.sh --python /opt/homebrew/bin/python3   # explicit python
+./status.sh                                        # 'loaded: yes', next fire, today's flag state
 ```
 
 Grant **Full Disk Access** to both `/bin/bash` and the Python binary the
@@ -284,10 +287,17 @@ LaunchAgent uses, otherwise the agent fires but can't read files under
 > add `/bin/bash` and your `.venv/bin/python3` (or wherever
 > `install.sh --python` points to).
 
-To turn it back off later:
+To turn it off again:
 
 ```bash
 ./uninstall.sh
+```
+
+Triggering a run on-demand without waiting for the next hour:
+
+```bash
+./run_daily.sh                  # honors today's success flag (skip if done)
+FORCE=1 ./run_daily.sh          # ignore today's flag and re-run
 ```
 
 ---

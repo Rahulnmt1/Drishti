@@ -138,8 +138,8 @@ launchctl start com.rahul.banking-kb-daily-refresh
 
 # Force a re-run within the day (ignores today's flag)
 FORCE=1 ./run_daily.sh
-# or:
-rm "_engine/_logs/.success_$(date +%Y-%m-%d).flag" && ./run_daily.sh
+# or (from this _scheduler/ folder):
+rm "../_logs/.success_$(date +%Y-%m-%d).flag" && ./run_daily.sh
 ```
 
 ### Files in this folder

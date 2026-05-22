@@ -48,15 +48,15 @@ with `python3 add_bank.py <Name>` as you onboard each.
 
 ## Contents
 
-1. [Layout on disk](#layout-on-disk)
-2. [First-time setup](#first-time-setup)
-3. [End-to-end pilot on one bank](#end-to-end-pilot-on-one-bank)
-4. [Backfill (run once)](#backfill-run-once)
-5. [Daily refresh — automatic and manual](#daily-refresh--automatic-and-manual)
-6. [Searching the corpus](#searching-the-corpus)
-7. [Adding a new bank or customer](#adding-a-new-bank-or-customer)
-8. [How auto-discovery works](#how-auto-discovery-works)
-9. [Command reference (cheat sheet)](#command-reference-cheat-sheet)
+1.  [Layout on disk](#layout-on-disk)
+2.  [First-time setup](#first-time-setup)
+3.  [End-to-end pilot on one bank](#end-to-end-pilot-on-one-bank)
+4.  [Verifying which config the engine loaded](#verifying-which-config-the-engine-loaded)
+5.  [Refreshing the KB](#refreshing-the-kb)
+6.  [Searching the corpus](#searching-the-corpus)
+7.  [Adding a new bank or customer](#adding-a-new-bank-or-customer)
+8.  [How auto-discovery works](#how-auto-discovery-works)
+9.  [Command reference (cheat sheet)](#command-reference-cheat-sheet)
 10. [Troubleshooting](#troubleshooting)
 11. [Files & data hygiene](#files--data-hygiene)
 
@@ -285,50 +285,81 @@ If `new_downloads=0` and `discovered=0`, see the
 
 ---
 
-## Backfill / refresh, scoped by focus
+## Verifying which config the engine loaded
 
-You'll typically operate on **one bank at a time** — you set a focus, then
-every subsequent command implicitly scopes to that bank. No `--bank` flag
-repetition.
+When you run for HDFC (or any bank), every config decision shows up in the
+verbose log. `./_scheduler/refresh.sh` already runs verbose by default, so
+you can grep the output for these lines:
 
-```bash
-./_scheduler/refresh.sh focus HDFC_Bank          # set the active bank
-./_scheduler/refresh.sh --mode backfill          # 5-year backfill for HDFC_Bank
-./_scheduler/refresh.sh                          # daily, HDFC_Bank
-./_scheduler/refresh.sh --type press_releases    # PRs only, HDFC_Bank
-./_scheduler/refresh.sh focus                    # show current focus
-./_scheduler/refresh.sh unfocus                  # clear focus
-```
+| Log line | What it proves |
+| --- | --- |
+| `Loaded adapter for HDFC_Bank (hooks: render_page)` | The per-bank `adapter.py` was discovered and imported. `hooks:` lists the functions the adapter overrides (an absent line means "no custom adapter, generic path"). |
+| `[HDFC_Bank] doc_type allowlist for this run: ['financial_result', 'investor_presentation', 'press_release']` | The whitelist from `settings.json` (and any `doc_types` override in the bank's `config.json`) — anything outside this list is dropped at classify time. |
+| `[HDFC_Bank] adapter render_page() returned 3 year-view(s)` | The adapter ran and returned blobs. If you wrote a new adapter and don't see this, your `render_page()` returned `None`/`[]` and the generic renderer took over. |
+| `[HDFC_Bank] adapter authoritative: 24 link(s) ... (static HTML had 68, ignored)` | The orchestrator is honoring the adapter's filter — it discarded the raw-HTML scrape (which would re-inject the rows the adapter filtered out). |
+| `discovered=24 (nse=0 ir=24)` | NSE contribution for this bank. `nse=0` proves `use_nse: false` is honored; a non-zero number means NSE was queried and returned filings. |
+| `new=N skipped=M` | `skipped=M` means the `manifest` table deduplicated `M` already-downloaded URLs — re-runs are idempotent. |
 
-Override per-shell with the `KB_FOCUS` env var:
-
-```bash
-KB_FOCUS=Axis_Bank ./_scheduler/refresh.sh --mode daily
-```
-
-Override per-command with the explicit `--bank` flag (highest precedence):
+Run it and watch the relevant lines:
 
 ```bash
-./_scheduler/refresh.sh --mode backfill --bank ICICI_Bank
+./_scheduler/refresh.sh focus HDFC_Bank
+./_scheduler/refresh.sh --mode daily 2>&1 | \
+    grep -E '(Loaded adapter|allowlist|adapter render_page|adapter authoritative|discovered=|TOTALS)'
 ```
 
-To run **every** registered bank in one go (ignoring focus), pass
-`--all-banks`:
+If you want to inspect the loaded config **without firing the network**, the
+registry exposes everything in one call:
 
 ```bash
-./_scheduler/refresh.sh --all-banks --mode daily
+.venv/bin/python3 - <<'PY'
+from pathlib import Path
+from bank_kb.registry import (
+    load_settings, load_all_banks,
+    adapter_render_page, adapter_classify_link, _adapter_hooks,
+)
+import json
+
+ENGINE = Path(".").resolve()
+print("settings.json:")
+s = load_settings(ENGINE)
+for k in ("history_years","request_delay_seconds","request_timeout_seconds",
+          "max_pdf_size_mb","doc_types_whitelist"):
+    print(f"  {k:28s} = {s[k]!r}")
+
+hdfc = load_all_banks(ENGINE, only="HDFC_Bank")[0]
+print(f"\nbanks/HDFC_Bank/:")
+print(f"  workspace folder           = {hdfc.folder}")
+print(f"  adapter loaded?            = {hdfc.adapter is not None}")
+print(f"    hooks defined            = {sorted(_adapter_hooks(hdfc.adapter)) or '<none>'}")
+print(f"    render_page wired?       = {adapter_render_page(hdfc) is not None}")
+print(f"    classify_link wired?     = {adapter_classify_link(hdfc) is not None}")
+print(f"  effective use_nse          = {hdfc.config.get('use_nse', True)}")
+print(f"\n  config.json (after comment-stripping + defaults):")
+print(json.dumps(hdfc.config, indent=4))
+PY
 ```
 
-Expect per-bank backfill cost:
+Expected output for HDFC today:
 
-- 20–80 PDFs typical (varies by how many press releases the bank lists)
-- 100–500 MB of disk
-- 2–10 minutes on a residential link (the engine sleeps 2 s between
-  requests to be polite — adjust `request_delay_seconds` in `settings.json`
-  if you have a faster pipe)
+```
+settings.json:
+  history_years                = 5
+  doc_types_whitelist          = ['investor_presentation', 'press_release', 'financial_result']
+banks/HDFC_Bank/:
+  adapter loaded?            = True
+    hooks defined            = ['render_page']
+    render_page wired?       = True
+  effective use_nse          = False
+  config.json:
+    { "name": "HDFC_Bank", "ticker": "HDFCBANK", "use_nse": false,
+      "sources": [{ "url": "https://www.hdfc.bank.in/about-us/investor-relations",
+                    "type_hint": "mixed", "requires_js": true }] }
+```
 
-The engine is **idempotent**. Re-running backfill is safe — already-downloaded
-URLs are skipped via the `manifest` table.
+Any drift here (e.g. `adapter loaded? = False`, or `use_nse = True`) tells
+you the file isn't where the engine is looking for it, or you've edited the
+wrong copy.
 
 ---
 
@@ -463,10 +494,10 @@ launchctl start com.rahul.banking-kb-daily-refresh
 
 # Force a re-run within the day (ignores today's flag)
 FORCE=1 ./run_daily.sh
-# or:  rm "_logs/.success_$(date +%Y-%m-%d).flag" && ./run_daily.sh
+# or:  rm "../_logs/.success_$(date +%Y-%m-%d).flag" && ./run_daily.sh
 
 # Tail the latest wrapper log
-ls -1t _engine/_logs/wrapper_*.log | head -1 | xargs tail -30
+ls -1t ../_logs/wrapper_*.log | head -1 | xargs tail -30
 ```
 
 ### Optional: Cowork chat report
@@ -480,24 +511,23 @@ read-only — it doesn't run the engine itself, just summarizes
 
 ### Status check
 
-```bash
-./_engine/_scheduler/refresh.sh --status
-```
-
-Shows last-run time, age of last run, total documents indexed, and the
-breakdown by bank and document type. If the last run is older than a few
-days, that's the cue to run `./refresh.sh` (without `--status`) to catch up.
-
-### Single-bank refresh
+Two complementary status commands:
 
 ```bash
-./_engine/_scheduler/refresh.sh --bank ICICI_Bank
-./_engine/_scheduler/refresh.sh --mode backfill --bank Yes_Bank
+./_scheduler/refresh.sh --status   # engine: focus, last-run time, corpus stats, doc-type whitelist
+./_scheduler/status.sh             # scheduler: loaded? next fire? today's success flag?
 ```
 
-You can still call `python3 _engine/run.py` directly if you prefer — it's
-what `refresh.sh` invokes under the hood — but the wrapper handles the
-venv activation, dep check, lock collision, and summary printing for you.
+`refresh.sh --status` answers "what's in the index right now?" — focus,
+last-run time, age of last run, total documents indexed, breakdown by bank
+and document type. `status.sh` answers "is the LaunchAgent doing its job?"
+— whether the agent is loaded, when it next fires, whether today's run
+has already succeeded.
+
+If `refresh.sh --status` shows the last run was several days ago and
+`status.sh` says the agent is loaded, see [Troubleshooting](#troubleshooting)
+— usually a permissions issue (Full Disk Access) silently blocking agent
+fires.
 
 ---
 
@@ -780,7 +810,11 @@ source .venv/bin/activate
 | Filter by topic only | `python3 query.py "" --topic digital_banking --limit 50` |
 | Get JSON for piping to an LLM | `python3 query.py "..." --json` |
 | Corpus stats | `python3 query.py --stats` |
-| List scheduled tasks | (open Cowork → "Scheduled" sidebar) |
+| Inspect what config the engine loaded for a bank | see [Verifying which config the engine loaded](#verifying-which-config-the-engine-loaded) |
+| Scheduler status (next fire, today's flag) | `./_scheduler/status.sh` |
+| Install / uninstall the daily scheduler | `./_scheduler/install.sh` &nbsp;/&nbsp; `./_scheduler/uninstall.sh` |
+| Trigger the scheduled run NOW (honors today's flag) | `./_scheduler/run_daily.sh` |
+| Force a scheduled re-run within the day (ignores today's flag) | `FORCE=1 ./_scheduler/run_daily.sh` |
 
 ---
 
@@ -821,9 +855,13 @@ Either:
 
 ### Last run was days ago — what should I do?
 ```bash
-python3 run.py --status
-python3 run.py --mode daily --verbose   # manual catch-up
+./_scheduler/refresh.sh --status                # see how stale
+./_scheduler/refresh.sh --mode daily            # manual catch-up
+./_scheduler/status.sh                          # if the LaunchAgent is installed, check why it didn't fire
 ```
+The most common cause when the agent is installed but not firing is missing
+**Full Disk Access** for `/bin/bash` and the Python binary — see the
+[scheduler README](_scheduler/README.md#macos-specifics-worth-knowing).
 
 ### Search returns nothing for a term you know exists in a downloaded PDF
 - Confirm the PDF was indexed:
