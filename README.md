@@ -472,6 +472,7 @@ fire per day actually runs the engine.
 | 11:00–15:00 | Wrapper fires. If the flag exists, it logs "today already succeeded — no work to do" and exits 0 in ~30 ms. Otherwise it retries. |
 | After 15:00 with no success | Day is over. The flag isn't written. Next attempt is tomorrow at 10:00. |
 | Mac was asleep at fire time | launchd fires the missed event on next wake. Flag protects against double-running on the same day. |
+| End of every fire (SKIP/OK/FAIL) | The wrapper prunes wrapper logs older than 7 days and re-renders `_logs/scheduler_status.txt` — a 7-day × 6-hour grid showing what happened at each fire. `cat` it or run `./_scheduler/status.sh` to see it. |
 
 Install / verify / uninstall:
 
@@ -811,7 +812,8 @@ source .venv/bin/activate
 | Get JSON for piping to an LLM | `python3 query.py "..." --json` |
 | Corpus stats | `python3 query.py --stats` |
 | Inspect what config the engine loaded for a bank | see [Verifying which config the engine loaded](#verifying-which-config-the-engine-loaded) |
-| Scheduler status (next fire, today's flag) | `./_scheduler/status.sh` |
+| Scheduler status (next fire, today's flag, 7-day table) | `./_scheduler/status.sh` |
+| Just the 7-day day×hour status grid | `cat _logs/scheduler_status.txt` &nbsp;or&nbsp; `./_scheduler/render_status.py` |
 | Install / uninstall the daily scheduler | `./_scheduler/install.sh` &nbsp;/&nbsp; `./_scheduler/uninstall.sh` |
 | Trigger the scheduled run NOW (honors today's flag) | `./_scheduler/run_daily.sh` |
 | Force a scheduled re-run within the day (ignores today's flag) | `FORCE=1 ./_scheduler/run_daily.sh` |

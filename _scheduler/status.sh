@@ -67,3 +67,13 @@ if [[ -n "$LATEST_WRAP" ]]; then
 else
   echo "  (none yet — agent has not fired)"
 fi
+
+echo
+echo "=== last 7 days (scheduler_status.txt) ==="
+STATUS_FILE="$LOG_DIR/scheduler_status.txt"
+if [[ -f "$STATUS_FILE" ]]; then
+  cat "$STATUS_FILE"
+else
+  echo "  (not generated yet — the next wrapper fire will create it)"
+  echo "  to render on-demand:  $HERE/render_status.py"
+fi

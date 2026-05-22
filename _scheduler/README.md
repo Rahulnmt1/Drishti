@@ -147,11 +147,12 @@ rm "../_logs/.success_$(date +%Y-%m-%d).flag" && ./run_daily.sh
 | File | Role |
 | --- | --- |
 | `refresh.sh` | Manual entry point, foreground, from Cursor's terminal. Doesn't touch the success flag. |
-| `run_daily.sh` | LaunchAgent wrapper. Reads/writes `_logs/.success_YYYY-MM-DD.flag`. Exit 0 means "engine succeeded OR today already done"; exit 1 means "engine failed, next hour will retry". |
+| `run_daily.sh` | LaunchAgent wrapper. Reads/writes `_logs/.success_YYYY-MM-DD.flag`. On every fire (SKIP/OK/FAIL) it prunes old wrapper logs and re-renders `_logs/scheduler_status.txt`. Exit 0 means "engine succeeded OR today already done"; exit 1 means "engine failed, next hour will retry". |
+| `render_status.py` | Stdlib-only Python that scans the last 7 days of `wrapper_*.log` files and writes the day×hour table to `_logs/scheduler_status.txt`. Invoked from `run_daily.sh` (end of every fire) and runnable on-demand. |
 | `com.rahul.banking-kb-daily-refresh.plist.template` | macOS LaunchAgent plist with `__KB_ROOT__` and `__PYTHON_BIN__` placeholders. Schedule is hardcoded (6 fires daily, 10-15). |
 | `install.sh` | Renders the template into `~/Library/LaunchAgents/`, `launchctl load`s it. |
 | `uninstall.sh` | `launchctl unload` + remove the plist. |
-| `status.sh` | Loaded? Today's flag state? Next fire time? Last engine + wrapper logs. |
+| `status.sh` | Loaded? Today's flag state? Next fire time? Last engine + wrapper logs? **Also embeds the 7-day status table at the bottom.** |
 | `cowork_report_prompt.md` | Source-of-truth for the optional Cowork chat-report task. |
 
 ### Files the wrapper reads/writes under `_engine/_logs/`
@@ -159,9 +160,42 @@ rm "../_logs/.success_$(date +%Y-%m-%d).flag" && ./run_daily.sh
 | Path | Role |
 | --- | --- |
 | `.success_YYYY-MM-DD.flag` | Per-day "today already done" marker. Created on first engine exit 0; older flags auto-pruned after 14 days. |
-| `wrapper_YYYY-MM-DD_HHMM.log` | One per LaunchAgent fire. Header + engine output + final SKIP/OK/FAIL line. Most-recent 30 retained. |
+| `wrapper_YYYY-MM-DD_HHMM.log` | One per LaunchAgent fire. Header + engine output + final SKIP/OK/FAIL line. **Retained for 7 days, pruned by age** (was previously "30 most recent"; the age-based rule guarantees the 7-day status table always has data). |
+| `scheduler_status.txt` | Rolling 7-day × 6-hour table of fire outcomes. Always regenerated at the end of every wrapper fire. See [Reading scheduler_status.txt](#reading-scheduler_statustxt) below. |
 | `run_YYYY-MM-DD_HHMM.json` | Engine's own JSON run summary. Written by `run.py`. Kept indefinitely. |
 | `launchd_stdout.log` / `launchd_stderr.log` | launchd's raw capture. Useful only when the wrapper itself didn't get far enough to write its own log. |
+
+### Reading `scheduler_status.txt`
+
+A 7-day × 6-hour grid showing what happened at each scheduled fire time.
+Cell codes:
+
+| Code | Meaning |
+| --- | --- |
+| `OK` | Engine ran and exit 0. Whichever fire of the day got the first `OK` wins; the rest of that day's fires `SKIP` via the flag. |
+| `SK` | Fire happened but the engine was skipped because today's flag was already present. |
+| `FL` | Engine ran and exit non-zero (or wrapper preflight failed). The next hourly fire is the actual retry. |
+| `.` | No fire recorded at this hour. Means one of: Mac was asleep/off, LaunchAgent wasn't loaded yet, the day predates installation, or this hour hasn't arrived yet (today's future hours render as blank, not `.`). |
+
+Read three things at a glance:
+
+1. The **First success** column shows the timestamp of each day's first
+   successful fire — `10:00` is the happy path, anything later means at
+   least one hourly retry was needed.
+2. A row of all `FL` (or `FL FL FL FL FL FL`) is a catastrophic day —
+   something systemic (bank CDN, NSE, network) was wrong all day. Look at
+   the wrapper log for any fire on that day for the actual error.
+3. A row of all `.` means **nothing fired that day** — usually a sleeping
+   Mac. If it appears mid-week unexpectedly, check `caffeinate` settings
+   and System Settings → Sleep schedule.
+
+To render on-demand without waiting for the next wrapper fire:
+
+```bash
+./_scheduler/render_status.py            # writes _logs/scheduler_status.txt and prints
+```
+
+Or just `cat _engine/_logs/scheduler_status.txt`.
 
 ### macOS specifics worth knowing
 
