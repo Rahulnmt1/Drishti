@@ -1,0 +1,18 @@
+{
+  "name": "Yes_Bank",
+  "ticker": "YESBANK",
+  "category": "private",
+
+  "_comment_use_nse": "NSE corporate-announcements feed for YESBANK is currently blocked at the Akamai/IP layer from this network (same issue we see with NSE filings for HDFC's FY22/FY23). Disable to skip a guaranteed-failed round-trip on every run.",
+  "use_nse": false,
+
+  "_comment_sources": "ONE source: the IP page only. PR page is intentionally NOT registered — Yes Bank publishes press releases as HTML article pages (e.g. /about-us/media/press-releases-details/<id>-<slug>) rather than PDFs, and the engine is currently PDF-only. Adding HTML-article ingestion is a shared feature that will be built when a second bank with the same shape gets onboarded. See banks/Yes_Bank/notes.md for the full investigation.",
+  "_comment_requires_js": "Yes Bank's IR pages are an Oracle Sites Cloud SPA fronted by Akamai — headless Chromium is rejected with ERR_HTTP2_PROTOCOL_ERROR and the page shell has no IP anchors anyway (content hydrates via JS XHR calls). The adapter.py side-steps the page entirely by querying the OCM published-items API directly (no browser needed), so requires_js is moot here; left as true for backward compatibility if the adapter ever falls back to generic rendering.",
+  "sources": [
+    {
+      "url": "https://www.yes.bank.in/about-us/investors-relation/financial-information/investor-presentation",
+      "type_hint": "investor_presentation",
+      "requires_js": true
+    }
+  ]
+}

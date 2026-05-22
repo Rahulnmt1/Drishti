@@ -27,8 +27,8 @@ if you ever need to expand.
 
 ## Per-bank workspace, not monolithic config
 
-Each bank lives in its own folder under `banks/<BankName>/`. Two banks ship
-in this repo as opposite-end worked examples:
+Each bank lives in its own folder under `banks/<BankName>/`. Three banks ship
+in this repo as worked examples spanning the spectrum of difficulty:
 
 ```
 banks/HDFC_Bank/        ← "needs an adapter" — non-<select> year picker, aria-label filter, CDN probe
@@ -39,11 +39,16 @@ banks/HDFC_Bank/        ← "needs an adapter" — non-<select> year picker, ari
 banks/Axis_Bank/        ← "config-only" — generic engine drives it, no adapter file at all
 ├── config.json
 └── notes.md            ← log of the URL conventions + the 2 classifier features that made it work
+
+banks/Yes_Bank/         ← "talk to the CMS API, not the page" — Akamai blocks browsers anyway
+├── config.json
+├── notes.md            ← why Chromium/Firefox aren't viable; how we reverse-engineered the OCM items API
+└── adapter.py          ← 200 lines of plain requests — no Playwright at all
 ```
 
 See [`banks/README.md`](banks/README.md) for the full per-bank file shape and
-the adapter contract. Pick the closest of HDFC_Bank / Axis_Bank as your
-template when onboarding a new bank, and add them one at a time with
+the adapter contract. Pick the closest of HDFC_Bank / Axis_Bank / Yes_Bank as
+your template when onboarding a new bank, and add them one at a time with
 `python3 add_bank.py <Name>`.
 
 ---
@@ -129,6 +134,15 @@ KnowledgeBase/
 │   ├── press_releases/
 │   │   ├── FY2022 … FY2026/axis-bank-announces-financial-results-*.pdf  (mix of quarterly + featured PRs)
 │   │   └── undated/2024-burgundy-private-hurun-india500-national.pdf  (1 — year-only filename, unsolvable)
+│   └── extracted_text/*.txt
+├── Yes_Bank/                                           # ← API-only: bypasses Akamai by talking to OCM directly
+│   ├── investor_presentations/
+│   │   ├── FY2022/1 IP (q4)
+│   │   ├── FY2023/4 quarterly IPs
+│   │   ├── FY2024/5 IPs (q1-q4 + june 2023 event deck)
+│   │   ├── FY2025/6 IPs (q1-q4 + sep/nov 2024 event decks)
+│   │   └── FY2026/7 IPs (q1-q4 + may/nov 2025 + feb 2026 event decks)
+│   ├── press_releases/   (empty — Yes Bank PRs are HTML articles, not PDFs; deferred)
 │   └── extracted_text/*.txt
 └── ... (one folder per bank you've added)
 ```
@@ -341,12 +355,63 @@ What the engine does differently for Axis (without you writing any code):
    prefix in its filename and is genuinely ambiguous between FY24 and
    FY25; documented in `banks/Axis_Bank/notes.md`.
 
-The two worked examples together cover both deployment patterns:
+### Third worked example: Yes_Bank (adapter talks to the CMS API, not the page)
 
-| Pattern                    | Bank      | Why                                                                          |
-| -------------------------- | --------- | ---------------------------------------------------------------------------- |
-| Custom `adapter.py`        | HDFC_Bank | Non-`<select>` year picker, aria-label filter, predictable CDN for unlinked older IPs |
-| Config-only, no adapter    | Axis_Bank | Native `<select>` + pre-rendered PR archive that the generic path drives as-is |
+**Yes_Bank** is the third pattern: a bank whose IR site is hostile to
+browser automation but whose content lives behind a public REST API. The
+adapter never opens a browser — it just queries Oracle Content Management
+(OCM) directly.
+
+The flow is identical from your terminal:
+
+```bash
+./_scheduler/refresh.sh focus Yes_Bank
+./_scheduler/refresh.sh --mode backfill
+./_scheduler/refresh.sh --status
+```
+
+What's different under the hood:
+
+1. The IR page (`/about-us/investors-relation/.../investor-presentation`)
+   is an Oracle Sites Cloud SPA fronted by Akamai. Headless Chromium gets
+   rejected with `ERR_HTTP2_PROTOCOL_ERROR` (TLS/H2 fingerprint blocked)
+   and even Firefox + stealth gets only a small fraction of IPs because
+   the page hides most of them behind article-style URLs that aren't
+   simple PDF links.
+2. The adapter (`banks/Yes_Bank/adapter.py`) reverse-engineers what the
+   SPA itself does: every IP is an OCM content item of type
+   `ybl-mig-investor-presentation-drop-down`. One call to
+   `/sites/web/content/published/api/v1.1/items?q=(type eq ...)` enumerates
+   all 128 IPs across all years. For each in-window item we extract the
+   PDF filename from `fields.product_research_txt_1` or the embedded HTML,
+   then a second cheap lookup gives us the direct asset URL.
+3. The adapter is **plain `requests`** — no Playwright, no Firefox install
+   required, runs in ~3 seconds for discovery.
+4. Press releases are intentionally not registered: Yes Bank publishes them
+   as HTML article pages (`/about-us/media/press-releases-details/...`),
+   not PDFs. The engine is currently PDF-only; adding HTML-article
+   ingestion will be a shared engine feature when a second bank with the
+   same shape lands.
+5. Result: **23 IPs across FY22-FY26**, fully quarterly for FY23-FY26 plus
+   event-deck supplements (May 2025 transaction-update deck, Sep/Nov 2024
+   conference decks, June 2023 deck, etc.). FY22 has only the Q4 IP — the
+   3 older quarterly IPs in that year have calendar-date filenames the
+   classifier reassigns to FY21 (outside the 5-year window). Full details
+   in `banks/Yes_Bank/notes.md`.
+
+The three worked examples together cover the three deployment patterns:
+
+| Pattern                              | Bank      | Why                                                                                  |
+| ------------------------------------ | --------- | ------------------------------------------------------------------------------------ |
+| Custom `adapter.py` (DOM rewrite)    | HDFC_Bank | Non-`<select>` year picker, aria-label filter, predictable CDN for unlinked older IPs |
+| Config-only, no adapter              | Axis_Bank | Native `<select>` + pre-rendered PR archive that the generic path drives as-is        |
+| Custom `adapter.py` (CMS API direct) | Yes_Bank  | Akamai blocks headless browsers; the underlying OCM items API is public and complete |
+
+When you onboard a new bank: try config-only first (Axis pattern). If the
+generic JS-render path fails (page won't render, content not in DOM,
+custom widgets you can't drive), pick HDFC's adapter as the template. If
+even that doesn't work because of bot-protection or aggressive SPA-isation,
+pick Yes Bank's adapter as the template and look for a backing CMS API.
 
 ---
 
