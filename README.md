@@ -138,11 +138,16 @@ KnowledgeBase/
 ├── Yes_Bank/                                           # ← API-only: bypasses Akamai by talking to OCM directly
 │   ├── investor_presentations/
 │   │   ├── FY2022/1 IP (q4)
-│   │   ├── FY2023/4 quarterly IPs
-│   │   ├── FY2024/5 IPs (q1-q4 + june 2023 event deck)
-│   │   ├── FY2025/6 IPs (q1-q4 + sep/nov 2024 event decks)
-│   │   └── FY2026/7 IPs (q1-q4 + may/nov 2025 + feb 2026 event decks)
-│   ├── press_releases/   (empty — Yes Bank PRs are HTML articles, not PDFs; deferred)
+│   │   ├── FY2023/7 IPs+financial_results (quarterly IPs + financial-result tables)
+│   │   ├── FY2024/7 IPs+financial_results
+│   │   ├── FY2025/9 IPs+financial_results
+│   │   └── FY2026/9 IPs+financial_results (q1-q4 + transaction-update + smbc decks)
+│   ├── press_releases/   # Rendered from CMS HTML field — Yes Bank doesn't publish
+│   │   ├── FY2022/21 PRs   #   PR PDFs, so the adapter renders the HTML body via
+│   │   ├── FY2023/31 PRs   #   headless Chromium (Akamai-safe — never navigates to
+│   │   ├── FY2024/14 PRs   #   yes.bank.in for the render). 12 PRs whose HTML body
+│   │   ├── FY2025/15 PRs   #   contains an embedded PDF link skip the render and use
+│   │   └── FY2026/14 PRs   #   the real OCM-asset PDF instead. See banks/Yes_Bank/notes.md.
 │   └── extracted_text/*.txt
 └── ... (one folder per bank you've added)
 ```
@@ -380,24 +385,50 @@ What's different under the hood:
    simple PDF links.
 2. The adapter (`banks/Yes_Bank/adapter.py`) reverse-engineers what the
    SPA itself does: every IP is an OCM content item of type
-   `ybl-mig-investor-presentation-drop-down`. One call to
+   `ybl-mig-investor-presentation-drop-down`, every PR is type
+   `ybl-mig-pl-drop-down`. One call to
    `/sites/web/content/published/api/v1.1/items?q=(type eq ...)` enumerates
-   all 128 IPs across all years. For each in-window item we extract the
+   all of them across all years. For each in-window IP we extract the
    PDF filename from `fields.product_research_txt_1` or the embedded HTML,
    then a second cheap lookup gives us the direct asset URL.
-3. The adapter is **plain `requests`** — no Playwright, no Firefox install
-   required, runs in ~3 seconds for discovery.
-4. Press releases are intentionally not registered: Yes Bank publishes them
-   as HTML article pages (`/about-us/media/press-releases-details/...`),
-   not PDFs. The engine is currently PDF-only; adding HTML-article
-   ingestion will be a shared engine feature when a second bank with the
-   same shape lands.
-5. Result: **23 IPs across FY22-FY26**, fully quarterly for FY23-FY26 plus
-   event-deck supplements (May 2025 transaction-update deck, Sep/Nov 2024
-   conference decks, June 2023 deck, etc.). FY22 has only the Q4 IP — the
-   3 older quarterly IPs in that year have calendar-date filenames the
-   classifier reassigns to FY21 (outside the 5-year window). Full details
-   in `banks/Yes_Bank/notes.md`.
+3. **Press releases need an extra wrinkle.** Yes Bank does NOT publish PR
+   PDFs — the press release content (financial tables, narrative, executive
+   quotes) is embedded directly into the OCM item's `press_realeases` field
+   as HTML. The detail page renders that HTML and it LOOKS like a formatted
+   document, so it's easy to mistake for a PDF, but no actual PDF exists at
+   the CMS level for ~80% of PRs. The adapter handles both cases:
+   - The ~12 PRs whose HTML body contains an `<a href=".../pdf?name=foo.pdf">`
+     go through the same asset-URL resolution path as IPs.
+   - The ~80+ HTML-only PRs are rendered to PDF locally via headless
+     Chromium (Akamai-safe — we feed our own HTML via `page.set_content()`
+     and never navigate to yes.bank.in). The PDF is cached under
+     `_engine/.cache/yes_bank_pr_pdfs/<slug>.pdf` and surfaced to the
+     engine as a `file://` URL.
+4. To make the `file://` path work end-to-end, the engine's `Fetcher.get()`
+   gained a small `file://` branch (in `bank_kb/fetcher.py`) that reads
+   the local file and returns it as if it came from HTTP. The orchestrator
+   pipeline (sanity-check `%PDF`, save to canonical bank path, extract,
+   index) is unchanged. Any future bank with the same
+   "upstream isn't a downloadable PDF" problem benefits automatically.
+5. The adapter also exports a `classify_link` hook that the orchestrator
+   auto-picks-up. Most Yes Bank PR filenames have no "press"/"release"
+   substring (cache slugs like `1481791861158-yb-launches-cluster-...pdf`
+   or OCM filenames like `yes_bank_tops_sp_global_csa_rankings.pdf`), so
+   the generic classifier would otherwise label them `other` and the
+   doc-type allowlist would drop them. The hook tracks every URL the
+   adapter built for the PR source in a per-run set and forces
+   `doc_type="press_release"` on membership match.
+6. The adapter is **plain `requests` + Playwright (only for PR renders)**
+   — no Firefox install needed, no browser for IPs at all. Discovery runs
+   in ~3 seconds; PR renders are amortized (Chromium launched once per
+   run) and the cache survives subsequent backfills so re-runs skip the
+   render entirely.
+7. Result: **128 documents across FY22-FY26**, broken down as **95 PRs**
+   (12 from real OCM assets + 83 rendered from HTML body) and **33
+   IPs+financial_results** (true IPs plus financial-result tables, which
+   the engine stores under `investor_presentations/` per
+   `TYPE_TO_FOLDER`). 100% coverage of in-window items reported by the
+   OCM API. Full details in `banks/Yes_Bank/notes.md`.
 
 The three worked examples together cover the three deployment patterns:
 

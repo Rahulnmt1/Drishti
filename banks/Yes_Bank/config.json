@@ -6,12 +6,17 @@
   "_comment_use_nse": "NSE corporate-announcements feed for YESBANK is currently blocked at the Akamai/IP layer from this network (same issue we see with NSE filings for HDFC's FY22/FY23). Disable to skip a guaranteed-failed round-trip on every run.",
   "use_nse": false,
 
-  "_comment_sources": "ONE source: the IP page only. PR page is intentionally NOT registered — Yes Bank publishes press releases as HTML article pages (e.g. /about-us/media/press-releases-details/<id>-<slug>) rather than PDFs, and the engine is currently PDF-only. Adding HTML-article ingestion is a shared feature that will be built when a second bank with the same shape gets onboarded. See banks/Yes_Bank/notes.md for the full investigation.",
-  "_comment_requires_js": "Yes Bank's IR pages are an Oracle Sites Cloud SPA fronted by Akamai — headless Chromium is rejected with ERR_HTTP2_PROTOCOL_ERROR and the page shell has no IP anchors anyway (content hydrates via JS XHR calls). The adapter.py side-steps the page entirely by querying the OCM published-items API directly (no browser needed), so requires_js is moot here; left as true for backward compatibility if the adapter ever falls back to generic rendering.",
+  "_comment_sources": "TWO sources, both Oracle Sites Cloud SPAs fronted by Akamai. Neither URL is what the engine actually downloads from — they're passed into the adapter as routing hints (the adapter's render_page() dispatches on URL substring). The IP source resolves filenames to direct OCM asset URLs; the PR source generates synthetic PDFs from HTML-body fields (Yes Bank doesn't publish PR PDFs — the press release content lives as HTML inside the OCM item itself). See banks/Yes_Bank/notes.md for the full investigation.",
+  "_comment_requires_js": "requires_js is irrelevant here — the adapter never lets the engine render either page in a browser (Akamai blocks Chromium, the page shells have no content anchors, and PRs aren't PDFs anyway). Both sources route through adapter.py's render_page().",
   "sources": [
     {
       "url": "https://www.yes.bank.in/about-us/investors-relation/financial-information/investor-presentation",
       "type_hint": "investor_presentation",
+      "requires_js": true
+    },
+    {
+      "url": "https://www.yes.bank.in/about-us/media/press-releases",
+      "type_hint": "press_release",
       "requires_js": true
     }
   ]

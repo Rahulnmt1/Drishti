@@ -25,6 +25,12 @@ _logs_archive/
 *.swp
 *.swo
 
+# Per-bank adapter caches — adapters that pre-render content the engine can't
+# fetch directly (e.g. Yes Bank's HTML-body press releases rendered to PDF via
+# headless Chromium) keep their output here. Treated like derived state:
+# regenerable from the OCM API on the next backfill, never source-of-truth.
+.cache/
+
 # One-off investigation scripts + page dumps used when onboarding a new bank.
 # Findings get distilled into banks/<Bank>/notes.md — the raw probe artifacts
 # are not worth committing (HTML dumps can be 1-2 MB each, and the probe

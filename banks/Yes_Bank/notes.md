@@ -7,7 +7,7 @@ Last verified: 2026-05-22 (this commit).
 | What                       | URL                                                                                                  | How we ingest it                                  |
 | -------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
 | Investor Presentation page | https://www.yes.bank.in/about-us/investors-relation/financial-information/investor-presentation     | OCM **items API** via `adapter.py` (no browser)   |
-| Press releases             | https://www.yes.bank.in/about-us/media/press-releases                                                | **Not ingested** — see "Press releases" below.    |
+| Press releases             | https://www.yes.bank.in/about-us/media/press-releases                                                | OCM **items API** + local HTML→PDF render (see "Press releases" below). |
 | NSE corporate-filings feed | https://www.nseindia.com/api/corporate-announcements?index=equities&symbol=YESBANK                  | Disabled (`use_nse: false`, Akamai IP-block).     |
 
 ## What the IR page actually looks like
@@ -47,12 +47,12 @@ talking directly to OCM:
 
 3.  **Oracle Content REST API directly** — this is what shipped. See below.
 
-## How the adapter actually works
+## How the IP route of the adapter works
 
 Every IP on the IR page is backed by an OCM content item of type
 `ybl-mig-investor-presentation-drop-down` (discovered by capturing the XHR
 the SPA fires when opening an article-style URL). The published items API
-returns all 128 of them in a single call:
+returns all 128+ of them in a single call (paginated if needed):
 
 ```
 GET https://www.yes.bank.in/sites/web/content/published/api/v1.1/items
@@ -77,7 +77,7 @@ The adapter:
     `customProperties.siteToken` — the OCM channel token for asset
     downloads (different from the page-rendering channel token). Re-read
     every run so a token rotation never breaks the adapter silently.
-2.  Calls the items API once → 128 items.
+2.  Calls the items API → all IPs (paginated; ~128 today).
 3.  For each item inside the engine's `history_years` window (matched on
     `year_field` end-year), extracts the PDF filename via the priority
     chain `product_research_txt_1 → href=".../pdf?name=X.pdf" inside
@@ -98,50 +98,128 @@ The adapter:
 Run-time cost: ~3 seconds for discovery (one type query + one name-lookup
 per in-window item) plus actual PDF downloads. No Firefox/Chromium needed.
 
-## Press releases — intentionally not ingested
+## How the PR route of the adapter works
 
-The press-releases page (https://www.yes.bank.in/about-us/media/press-releases)
-publishes each PR as an **HTML article page** like
-`/about-us/media/press-releases-details/<id>-<slug>`, not as a PDF. The
-engine is currently PDF-only — there is no code path that fetches an HTML
-article and extracts the body. We may add that as a shared engine feature
-later (it would also help any other bank that publishes HTML-only PRs).
+Yes Bank's press releases (https://www.yes.bank.in/about-us/media/press-releases)
+look like documents in the browser — clicking a PR title navigates to a
+detail page that renders a formatted press release with tables, narrative,
+financial highlights, and so on. BUT no PDF file actually exists at the CMS
+level for most of them. The detail page is a SPA that renders an HTML field
+from an OCM content item; the formatting just makes it LOOK like a PDF.
 
-For now, the `config.json` registers only the IP source. Adding a PR source
-later just needs the URL + a new content-type-based query in the adapter
-once HTML-article ingestion lands.
+Specifically, every PR is backed by an OCM content item of type
+`ybl-mig-pl-drop-down` (note: "pl" for press release; discovered the same
+way as the IP type — XHR network capture from a PR detail page) with these
+fields:
 
-## Coverage as of first onboarding run
+| Field                                         | Meaning                                              |
+| --------------------------------------------- | ---------------------------------------------------- |
+| `fields.year_field`                           | FY label e.g. `"2025-2026"` (4-4 format, not 4-2)    |
+| `fields.month_field`                          | Month string e.g. `"APRIL"`                          |
+| `fields.press_release_headers`                | Press release title                                  |
+| `fields.press_realeases`                      | **The entire PR body, as HTML.** Vendor typo intentional. |
+| `name`, `slug`                                | OCM identifiers                                      |
 
-For the engine's default 5-year window (FY22-FY26):
+Out of every 87+ PRs in the engine's 5-year window:
 
-| Fiscal year | IPs ingested | Notes                                                       |
-| ----------- | ------------ | ----------------------------------------------------------- |
-| FY2026      | 7            | Q1-Q4 quarterlies + Nov 2025 / Feb 2026 / May 2025 decks    |
-| FY2025      | 6            | Q1-Q4 quarterlies + Sep 2024 / Nov 2024 decks               |
-| FY2024      | 5            | Q1-Q4 quarterlies + June 2023 deck                          |
-| FY2023      | 4            | Q1-Q4 quarterlies                                           |
-| FY2022      | 1            | Q4 (March 2022) — see "Why FY2022 only shows 1" below       |
-| **Total**   | **23**       |                                                             |
+- **~12 contain `<a href=".../pdf?name=foo.pdf">` inside `press_realeases`.**
+  These are FY26-era PRs where Yes Bank prepared a separate PDF (a real
+  Acrobat document) and embedded a link to it in an otherwise-short HTML
+  body. For those, the adapter goes down the same asset-URL resolution
+  path as IPs — `_filename_to_asset_url(name=...)` → direct OCM asset
+  link → engine downloads with plain requests.
+- **~80+ are HTML-body-only.** The `press_realeases` field is the full
+  press release — quarterly financial highlights tables, narrative
+  paragraphs, executive quotes, contact footer. No PDF anywhere. For
+  those, the adapter renders the HTML body to a PDF locally:
 
-The items API reported 31 IPs across these 5 years; we downloaded 23. The
-8 not-downloaded break down as:
+    1.  Lazy-launches headless Chromium **once per run** via Playwright.
+    2.  For each HTML-body PR, wraps the `press_realeases` field in a
+        minimal HTML template (title + small print-friendly CSS) and
+        feeds it to Chromium via `page.set_content(...)` — never
+        navigates to yes.bank.in, so Akamai never sees us.
+    3.  Renders to A4 PDF via `page.pdf(...)` and writes to
+        `_engine/.cache/yes_bank_pr_pdfs/<slug>.pdf`. Atomic via
+        write-to-tmp + rename. Cached files survive subsequent runs so
+        a re-backfill skips the render step entirely.
+    4.  Returns `file:///...<slug>.pdf` as the anchor href.
 
-- 2 items whose `investor_presentation` HTML field contains no actual PDF
-  reference (placeholder content Yes Bank never wired up).
-- 6 items the classifier reassigned to an out-of-window fiscal year based
-  on their filename. E.g. an item with `year_field = "2021-22"` and a
-  filename like `..._december_31_2021.pdf` gets classified as Q3 FY2022,
-  which is in window; but a filename like `..._sep_30_2021.pdf` also gets
-  classified as Q2 FY2022 (in window) — so the actual reclassification
-  loss is smaller than the 6 number suggests. Some FY2022 items have
-  filenames whose dates the classifier couldn't unambiguously map to a
-  fiscal year, so they default to the calendar-year fiscal year (FY2021,
-  which is outside our 5-year window).
+  The engine's `Fetcher.get()` has a small `file://` branch (added in this
+  commit; see `bank_kb/fetcher.py`) that reads those local files and
+  returns them as if they came from HTTP. Throttling and retries are
+  skipped for `file://` — it's just a buffered read.
 
-### Why FY2022 only shows 1 file
+## Why classify_link is needed for PRs
 
-The 4 Yes-Bank items with `year_field = "2021-22"` are:
+The orchestrator runs every discovered link through `bank_kb.classify` to
+decide `doc_type` (investor_presentation / press_release / financial_result
+/ ...). The generic classifier inspects URL + anchor text against keyword
+patterns. Many Yes Bank PR URLs and filenames have **no** "press" /
+"release" / "pr" substring:
+
+- HTML-rendered PRs: cache filenames look like
+  `1481791861158-yb-launches-cluster-banking-initiative-in-nashik.pdf` —
+  no PR keyword.
+- Even some OCM-asset PRs have filenames like
+  `yes_bank_tops_sp_global_csa_rankings.pdf` or
+  `yes_bank_announces_the_mr_anantharaman_as_chief_risk_officer.pdf` —
+  no PR keyword either.
+
+The classifier's hint-gated fallback ("only trust the page-level
+`type_hint=press_release` if the URL itself looks press-release-shaped")
+labels these `other`, after which the doc-type allowlist drops them
+silently. Without an override, ~80% of in-window Yes Bank PRs would be
+discarded.
+
+So the adapter exports a `classify_link` hook (the registry auto-detects
+it). It maintains a per-run set `_PR_URLS_BUILT` of every URL it handed to
+the engine as a press release — both `file://` (HTML renders) and
+`https://` (OCM asset URLs from items with embedded PDFs). When the
+classifier calls `classify_link(url, anchor, default)`, the hook checks
+URL membership in that set; if it's there, it forces `doc_type =
+"press_release"` and otherwise returns `None` (= delegate to default).
+
+## Why the engine needed file:// support
+
+The orchestrator's download step is `fetcher.get(url) → bytes; sanity-
+check starts with %PDF; save to canonical bank path`. For us to ship
+locally-rendered PRs through that pipeline unchanged, the fetcher just
+needed to know how to read `file://` URLs. Five lines added to
+`bank_kb/fetcher.py` (`_read_file_url`). Any future bank with the same
+"upstream isn't actually a downloadable PDF" problem benefits
+automatically.
+
+## Coverage as of this commit (2026-05-22)
+
+Engine's default 5-year window (FY22-FY26):
+
+| Fiscal year | Press releases | IPs + financial_results | Total |
+| ----------- | -------------- | ----------------------- | ----- |
+| FY2026      | 14             | 9                       | 23    |
+| FY2025      | 15             | 9                       | 24    |
+| FY2024      | 14             | 7                       | 21    |
+| FY2023      | 31             | 7                       | 38    |
+| FY2022      | 21             | 1                       | 22    |
+| **Total**   | **95**         | **33**                  | **128** |
+
+In-window items reported by the OCM API: 128. In-window items ingested by
+the engine: 128. **100% coverage modulo Yes Bank's own placeholder/
+abandoned content.** Items dropped: 0 by doc-type allowlist, 2 outside
+history window (year_field doesn't parse cleanly — true edge cases on
+Yes Bank's side, not engine bugs).
+
+PR breakdown by source pathway:
+- 12 PRs surfaced via OCM-asset URLs (embedded PDF in HTML body).
+- 83 PRs rendered from HTML body via headless Chromium → cached → file://.
+
+`financial_result`-classified PDFs (e.g. "YES BANK ANNOUNCES FINANCIAL
+RESULTS FOR THE QUARTER ENDED JUNE 30, 2025") are stored under
+`investor_presentations/FY*/` per the engine's `TYPE_TO_FOLDER` mapping —
+this is intentional ("financial_result is stored alongside the deck").
+
+### FY2022 only has 1 IP
+
+The 4 Yes-Bank items with `year_field = "2021-22"` for IPs are:
 
 | Slug                                                                    | Filename hint                            | Classifier FY |
 | ----------------------------------------------------------------------- | ---------------------------------------- | ------------- |
@@ -167,10 +245,11 @@ Deferred for now (3 missing items isn't a blocker).
 
 - **Items API returns HTTP 4xx or different content type.** Yes Bank may
   have changed the OCM channel or content-type name. Re-capture by loading
-  an `/investor-presentation/<slug>` URL in Firefox with network logging
-  (`_scratch/probe_yes.py` has the recipe) and look for the XHR like
-  `?q=(type eq "...drop-down" AND Slug eq "...")`. Update `IP_CONTENT_TYPE`
-  in `adapter.py`.
+  an `/investor-presentation/<slug>` or `/press-releases-details/<slug>`
+  URL in Firefox with network logging (`_scratch/probe_yes_pr.py` has the
+  recipe). Look for the XHR like
+  `?q=(type eq "...drop-down" AND Slug eq "...")` — that's the content-type
+  name. Update `IP_CONTENT_TYPE` or `PR_CONTENT_TYPE` in `adapter.py`.
 - **siteToken not found in IR page HTML.** Yes Bank moved the token to a
   different property. Re-grep the IR page HTML for the hex32 string that
   appears in asset URLs (look at network log for a `…/assets/…?channelToken=`
@@ -179,3 +258,26 @@ Deferred for now (3 missing items isn't a blocker).
   or made private. Re-extract `siteToken` (it's re-extracted every run
   anyway). If still failing, the channel access policy itself changed —
   no recovery without Yes Bank intervention.
+- **HTML-rendered PRs have garbled text / missing tables.** Chromium
+  rendered the OCM HTML field in a way that lost structure. First try
+  clearing the cache so it re-renders: `rm -rf _engine/.cache/yes_bank_pr_pdfs/`
+  then re-run backfill. If still bad, the `_PDF_WRAPPER_CSS` in adapter.py
+  may need tuning for whatever new HTML pattern Yes Bank started using.
+- **Playwright/Chromium not installed.** The PR adapter logs a clear error
+  and skips HTML-body renders (the ~12 asset-backed PRs still ingest).
+  Fix: `playwright install chromium` inside the engine venv.
+
+## Cache management
+
+The local PR PDF cache (`_engine/.cache/yes_bank_pr_pdfs/`) is in
+`.gitignore` and treated as derived state — it can be wiped at any time
+and the next backfill will regenerate (slowly, since it relaunches
+Chromium per render). The engine's sqlite manifest is the source of truth
+for "what's already been downloaded"; clearing the cache doesn't re-trigger
+downloads of items already in the manifest because the URL didn't change
+(it's still `file:///.../<same-slug>.pdf`).
+
+To force a fresh render of one PR (e.g. Yes Bank updated the content),
+delete that specific cache file AND the corresponding row from
+`kb_index.sqlite` (or just delete the cache file and the destination PDF —
+the engine will then re-download it on the next run).

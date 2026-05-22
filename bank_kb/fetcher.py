@@ -13,6 +13,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+from urllib.parse import unquote, urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -64,6 +65,14 @@ class Fetcher:
         self._last_request_at = time.monotonic()
 
     def get(self, url: str, *, extra_headers: Optional[dict] = None) -> FetchResult:
+        # file:// URLs are produced by per-bank adapters that pre-render content
+        # the engine can't fetch directly (e.g. Yes Bank press releases live as
+        # HTML in a CMS field, not as downloadable PDFs — the adapter renders
+        # them to PDF locally and hands us a file:// path). No politeness
+        # throttling, no retries, no HTTP at all.
+        if url.startswith("file://"):
+            return self._read_file_url(url)
+
         self._throttle()
         headers = dict(extra_headers or {})
         try:
@@ -86,6 +95,26 @@ class Fetcher:
         except requests.RequestException as e:
             log.warning("Fetch failed for %s: %s", url, e)
             return FetchResult(url=url, status=0, content=None, headers={})
+
+    def _read_file_url(self, url: str) -> FetchResult:
+        """Read a local file produced by an adapter and return it like an HTTP
+        response. Adapters use this when the upstream source isn't a PDF the
+        engine can download directly."""
+        path = Path(unquote(urlparse(url).path))
+        if not path.is_file():
+            log.warning("file:// fetch missing: %s", path)
+            return FetchResult(url=url, status=404, content=None, headers={})
+        try:
+            data = path.read_bytes()
+        except OSError as e:
+            log.warning("file:// read failed for %s: %s", path, e)
+            return FetchResult(url=url, status=500, content=None, headers={})
+        if len(data) > self.max_bytes:
+            log.warning("file:// over size limit (%d MB): %s",
+                        self.max_bytes // (1024 * 1024), path)
+            return FetchResult(url=url, status=0, content=None, headers={})
+        return FetchResult(url=url, status=200, content=data,
+                           headers={"Content-Length": str(len(data))})
 
     @staticmethod
     def sha1(data: bytes) -> str:
