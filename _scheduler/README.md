@@ -104,6 +104,14 @@ This handles the common failure modes for IR-page scraping:
 - Transient TLS handshake failures from AEM-hosted bank sites
 - A laptop that's asleep at 10:00 — the 11:00 fire catches up
 
+**Bank coverage**: the wrapper invokes `run.py --mode daily --all-banks`.
+The `--all-banks` flag is deliberate — it tells the engine to ignore
+`.kb_focus` and `$KB_FOCUS` for this run, so the scheduled fire always
+processes **every** bank under `banks/<…>/`, even if a developer left a
+focus set from a manual session. Adding a new bank requires no
+scheduler-side change: drop a `banks/<NewBank>/config.json` into the
+registry and the next daily fire picks it up automatically.
+
 ### Install / verify / uninstall
 
 ```bash
@@ -147,7 +155,7 @@ rm "../_logs/.success_$(date +%Y-%m-%d).flag" && ./run_daily.sh
 | File | Role |
 | --- | --- |
 | `refresh.sh` | Manual entry point, foreground, from Cursor's terminal. Doesn't touch the success flag. |
-| `run_daily.sh` | LaunchAgent wrapper. Reads/writes `_logs/.success_YYYY-MM-DD.flag`. On every fire (SKIP/OK/FAIL) it prunes old wrapper logs and re-renders `_logs/scheduler_status.txt`. Exit 0 means "engine succeeded OR today already done"; exit 1 means "engine failed, next hour will retry". |
+| `run_daily.sh` | LaunchAgent wrapper. Reads/writes `_logs/.success_YYYY-MM-DD.flag`. Invokes the engine with `--all-banks` so a stale `.kb_focus` from a manual session can't shrink the scheduled run to one bank. On every fire (SKIP/OK/FAIL) it prunes old wrapper logs and re-renders `_logs/scheduler_status.txt`. Exit 0 means "engine succeeded OR today already done"; exit 1 means "engine failed, next hour will retry". |
 | `render_status.py` | Stdlib-only Python that scans the last 7 days of `wrapper_*.log` files and writes the day×hour table to `_logs/scheduler_status.txt`. Invoked from `run_daily.sh` (end of every fire) and runnable on-demand. |
 | `com.rahul.banking-kb-daily-refresh.plist.template` | macOS LaunchAgent plist with `__KB_ROOT__` and `__PYTHON_BIN__` placeholders. Schedule is hardcoded (6 fires daily, 10-15). |
 | `install.sh` | Renders the template into `~/Library/LaunchAgents/`, `launchctl load`s it. |

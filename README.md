@@ -539,6 +539,14 @@ fire per day actually runs the engine.
 | Mac was asleep at fire time | launchd fires the missed event on next wake. Flag protects against double-running on the same day. |
 | End of every fire (SKIP/OK/FAIL) | The wrapper prunes wrapper logs older than 7 days and re-renders `_logs/scheduler_status.txt` — a 7-day × 6-hour grid showing what happened at each fire. `cat` it or run `./_scheduler/status.sh` to see it. |
 
+**Bank coverage** — the wrapper runs the engine with `--all-banks`, which
+ignores `.kb_focus` / `$KB_FOCUS` for the scheduled fire. So every bank
+under `banks/<…>/config.json` is refreshed every day, regardless of which
+bank a developer happens to be focused on in a manual session. Adding a
+new bank requires zero scheduler-side work — drop a new
+`banks/<NewBank>/config.json` into the registry and the next daily fire
+picks it up automatically.
+
 Install / verify / uninstall:
 
 ```bash

@@ -82,7 +82,13 @@ _wrapper_body() {
   fi
 
   cd "$KB_ROOT"
-  "$PYTHON_BIN" "$KB_ROOT/_engine/run.py" --mode daily
+  # --all-banks is REQUIRED here. The scheduled run must process every
+  # registered bank regardless of whether a developer left `.kb_focus` set
+  # to a single bank from a manual session. Without this flag, focused
+  # state would cause the daily LaunchAgent to silently shrink to one
+  # bank — which would look like success in the wrapper log but skip
+  # everything else.
+  "$PYTHON_BIN" "$KB_ROOT/_engine/run.py" --mode daily --all-banks
   local engine_rc=$?
 
   echo ""
