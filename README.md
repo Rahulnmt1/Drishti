@@ -109,8 +109,9 @@ KnowledgeBase/
 │   └── README.md            # this file
 ├── HDFC_Bank/                                          # ← bank corpus folders (siblings of _engine/)
 │   ├── investor_presentations/
-│   │   ├── FY2025/{Q1,Q2,Q3,Q4}FY25-earnings-presentation.pdf
-│   │   └── FY2026/{q1,q2,Q3,q4}fy26-earnings-presentation.pdf
+│   │   ├── FY2024/q{1,2,3,4}fy24-earnings-presentation.pdf       (4 — via CDN probe; not on IR page)
+│   │   ├── FY2025/{Q1,Q2,Q3,q4}fy25-*-presentation.pdf            (4 — via IR-page scrape)
+│   │   └── FY2026/{q1,q2,Q3,q4}fy26-earnings-presentation.pdf     (4 — via IR-page scrape)
 │   ├── press_releases/
 │   │   ├── FY2024/press-release-to-announce-financial-results-*.pdf  (4 quarters)
 │   │   ├── FY2025/press-release-to-announce-financial-results-*.pdf  (4 quarters)
@@ -200,11 +201,17 @@ What that does end-to-end for HDFC:
 2. Creates / heals `../HDFC_Bank/{investor_presentations, press_releases,
    extracted_text}/`.
 3. Invokes `banks/HDFC_Bank/adapter.render_page()` instead of the generic
-   Playwright renderer. The adapter loads HDFC's IR page once (no year-tab
-   clicks — all 3 years are pre-rendered in the DOM as CSS show/hide),
-   filters anchors to only those with `aria-label="Download Investor
-   Presentations"` or `"Download Press Releases"`, and returns one synthetic
-   HTML blob per fiscal year (FY26/FY25/FY24).
+   Playwright renderer. The adapter does two things in one call:
+   - **Scrape**: loads HDFC's IR page once (no year-tab clicks — all 3
+     linked years are pre-rendered in the DOM as CSS show/hide), filters
+     anchors to only those with `aria-label="Download Investor
+     Presentations"` or `"Download Press Releases"`.
+   - **CDN probe**: for any fiscal year in the engine's `history_years`
+     window that didn't get an IP from step 1, speculatively HEADs HDFC's
+     predictable CDN URL pattern (`/financial-results/<Y>-<Y>/quarter-N/q{N}fy{YY}-earnings-presentation.pdf`)
+     and adds any that respond 200. This recovers the 4 FY24 IPs that
+     HDFC keeps on their CDN but unlinked from the current IR layout.
+   - Returns one synthetic HTML blob per fiscal year (FY26/FY25/FY24).
 4. The engine treats the adapter's output as **authoritative** — it does
    NOT fall back to the static-HTML scrape (which would re-inject the
    filtered-out Key Parameters / Call Transcript / Financial Result rows).
@@ -213,6 +220,12 @@ What that does end-to-end for HDFC:
    extracted into `HDFC_Bank/extracted_text/`, indexed into
    `kb_index.sqlite`.
 6. Writes a run summary to `_engine/_logs/run_YYYY-MM-DD_HHMM.json`.
+
+> **Coverage note**: HDFC IPs are recoverable for FY24/FY25/FY26 only.
+> FY22 and FY23 IPs only exist on NSE's corporate-announcements feed,
+> which is currently network-blocked at the Akamai/IP layer from this
+> machine. See [`banks/HDFC_Bank/notes.md`](banks/HDFC_Bank/notes.md) for
+> the full investigation.
 
 ### What "success" looks like (real output, HDFC)
 
@@ -223,28 +236,37 @@ INFO bank_kb.registry: Loaded adapter for HDFC_Bank (hooks: render_page)
 INFO bank_kb.orchestrator: [HDFC_Bank] starting (backfill mode)
 INFO bank_kb.orchestrator: [HDFC_Bank] doc_type allowlist for this run: ['financial_result', 'investor_presentation', 'press_release']
 INFO bank_kb.orchestrator: [HDFC_Bank] fetching IR index https://www.hdfc.bank.in/about-us/investor-relations
+INFO bank_kb._adapters.hdfc_bank: HDFC CDN probe: FY24 Q1 IP found at https://www.hdfc.bank.in/.../q1fy24-earnings-presentation.pdf
+INFO bank_kb._adapters.hdfc_bank: HDFC CDN probe: FY24 Q2 IP found at https://www.hdfc.bank.in/.../q2fy24-earnings-presentation.pdf
+INFO bank_kb._adapters.hdfc_bank: HDFC CDN probe: FY24 Q3 IP found at https://www.hdfc.bank.in/.../q3fy24-earnings-presentation.pdf
+INFO bank_kb._adapters.hdfc_bank: HDFC CDN probe: FY24 Q4 IP found at https://www.hdfc.bank.in/.../q4fy24-earnings-presentation.pdf
+INFO bank_kb._adapters.hdfc_bank: HDFC: CDN probe added 4 IP anchor(s) not linked from the current IR page
 INFO bank_kb._adapters.hdfc_bank: HDFC: FY26 -> 8 kept anchor(s)
 INFO bank_kb._adapters.hdfc_bank: HDFC: FY25 -> 8 kept anchor(s)
-INFO bank_kb._adapters.hdfc_bank: HDFC: FY24 -> 4 kept anchor(s)
+INFO bank_kb._adapters.hdfc_bank: HDFC: FY24 -> 8 kept anchor(s)
 INFO bank_kb.orchestrator: [HDFC_Bank] adapter render_page() returned 3 year-view(s) for https://www.hdfc.bank.in/about-us/investor-relations
-INFO bank_kb.orchestrator: [HDFC_Bank] adapter authoritative: 20 link(s) across 3 year-view(s) (static HTML had 68, ignored) on https://...
+INFO bank_kb.orchestrator: [HDFC_Bank] adapter authoritative: 24 link(s) across 3 year-view(s) (static HTML had 68, ignored) on https://...
 INFO bank_kb.orchestrator: [HDFC_Bank] downloading https://www.hdfc.bank.in/...q4fy26-earnings-presentation.pdf -> HDFC_Bank/investor_presentations/FY2026/...
 ...
-INFO bank_kb.orchestrator: [HDFC_Bank] done: discovered=20 (nse=0 ir=20) in_window=20 new=20 skipped=0 skipped_by_type=0 dl_fail=0 ex_fail=0 js_render=1
+INFO bank_kb.orchestrator: [HDFC_Bank] done: discovered=24 (nse=0 ir=24) in_window=24 new=24 skipped=0 skipped_by_type=0 dl_fail=0 ex_fail=0 js_render=1
 ```
 
-The two key lines:
+The three key lines:
 
-- **`adapter authoritative: 20 link(s) ... (static HTML had 68, ignored)`** —
+- **`HDFC CDN probe: FY24 Q1 IP found at ...`** — the speculative probe
+  found PDFs that are NOT linked from the live IR page. Up to 8 HEAD
+  requests per missing (year, quarter); the probe terminates early on
+  each hit. Harmless on years where nothing exists (FY22/FY23: all 404s).
+- **`adapter authoritative: 24 link(s) ... (static HTML had 68, ignored)`** —
   proves the adapter's filter is in force; the engine ignored the 68
   un-filtered anchors that raw-HTML scraping would otherwise have used.
-- **`nse=0 ir=20`** — NSE was skipped (per HDFC's `use_nse: false`), so the
-  IR page is the sole source.
+- **`nse=0 ir=24`** — NSE was skipped (per HDFC's `use_nse: false`), so the
+  IR page (+ CDN probe) is the sole source.
 
-After this run, `./_scheduler/refresh.sh --status` will show 20 HDFC_Bank
-documents indexed (8 IPs + 12 PRs). A search like
+After this run, `./_scheduler/refresh.sh --status` will show 24 HDFC_Bank
+documents indexed (12 IPs + 12 PRs across FY24/FY25/FY26). A search like
 `python3 query.py "net interest margin" --bank HDFC_Bank` should return
-hits across HDFC's earnings decks for FY25 / FY26.
+hits across HDFC's earnings decks for all three years.
 
 ### Force a clean fresh pilot for HDFC
 
