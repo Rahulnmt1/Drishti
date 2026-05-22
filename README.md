@@ -27,22 +27,24 @@ if you ever need to expand.
 
 ## Per-bank workspace, not monolithic config
 
-Each bank lives in its own folder under `banks/<BankName>/`. The first one
-shipped in this repo is HDFC_Bank — it serves as the worked example
-throughout this doc:
+Each bank lives in its own folder under `banks/<BankName>/`. Two banks ship
+in this repo as opposite-end worked examples:
 
 ```
-banks/HDFC_Bank/
-├── config.json    ← ticker, IR sources, requires_js, use_nse, optional per-bank doc_types
-├── notes.md       ← human troubleshooting log (HDFC's exact page structure + why the adapter exists)
-└── adapter.py     ← custom Python: keep only IP/PR rows from HDFC's aria-labelled grid
+banks/HDFC_Bank/        ← "needs an adapter" — non-<select> year picker, aria-label filter, CDN probe
+├── config.json
+├── notes.md            ← real troubleshooting log explaining why the adapter exists
+└── adapter.py          ← custom Python: keep only IP/PR rows, probe CDN for older IPs
+
+banks/Axis_Bank/        ← "config-only" — generic engine drives it, no adapter file at all
+├── config.json
+└── notes.md            ← log of the URL conventions + the 2 classifier features that made it work
 ```
 
 See [`banks/README.md`](banks/README.md) for the full per-bank file shape and
-adapter contract, and [`banks/HDFC_Bank/notes.md`](banks/HDFC_Bank/notes.md)
-for a real example of what a populated notes file looks like. The starting
-state otherwise ships with zero registered banks; add them one at a time
-with `python3 add_bank.py <Name>` as you onboard each.
+the adapter contract. Pick the closest of HDFC_Bank / Axis_Bank as your
+template when onboarding a new bank, and add them one at a time with
+`python3 add_bank.py <Name>`.
 
 ---
 
@@ -116,6 +118,17 @@ KnowledgeBase/
 │   │   ├── FY2024/press-release-to-announce-financial-results-*.pdf  (4 quarters)
 │   │   ├── FY2025/press-release-to-announce-financial-results-*.pdf  (4 quarters)
 │   │   └── FY2026/press-release-{june,september,december,march}-*.pdf
+│   └── extracted_text/*.txt
+├── Axis_Bank/                                          # ← richer mix: quarterly IPs + event decks + 5y PR archive
+│   ├── investor_presentations/
+│   │   ├── FY2022/{quarterly IPs, ESG, digital-banking-2.0, Citibank-acquisition}.pdf  (10)
+│   │   ├── FY2023/{quarterly IPs, ESG, digital-banking conference deck}.pdf            (8)
+│   │   ├── FY2024/{quarterly IPs, ESG, debt-IP}.pdf                                    (7)
+│   │   ├── FY2025/{quarterly IPs, ESG, debt-IP}.pdf                                    (6)
+│   │   └── FY2026/{quarterly IPs, ESG, Jefferies "AI in banking" deck, quarterly result PDFs}.pdf (9)
+│   ├── press_releases/
+│   │   ├── FY2022 … FY2026/axis-bank-announces-financial-results-*.pdf  (mix of quarterly + featured PRs)
+│   │   └── undated/2024-burgundy-private-hurun-india500-national.pdf  (1 — year-only filename, unsolvable)
 │   └── extracted_text/*.txt
 └── ... (one folder per bank you've added)
 ```
@@ -282,6 +295,58 @@ sqlite3 kb_index.sqlite "DELETE FROM manifest WHERE bank = 'HDFC_Bank';
 
 If `new_downloads=0` and `discovered=0`, see the
 [Troubleshooting](#troubleshooting) section — usually a network/proxy issue.
+
+### Second worked example: Axis_Bank (no adapter)
+
+**Axis_Bank** is included as the counterpoint to HDFC — same engine,
+different bank, **zero per-bank Python**. It exists to show that the
+generic path covers most banks once the classifier knows the URL
+conventions in use.
+
+The flow is identical to HDFC:
+
+```bash
+./_scheduler/refresh.sh focus Axis_Bank
+./_scheduler/refresh.sh --mode backfill
+./_scheduler/refresh.sh --status
+```
+
+What the engine does differently for Axis (without you writing any code):
+
+1. Loads `banks/Axis_Bank/{config.json, notes.md}`. No `adapter.py`
+   is registered, so the orchestrator uses the generic Playwright +
+   discovery path. `use_nse: false` is set (same reasoning as HDFC).
+2. **IP page** (`/shareholders-corner/.../investor-presentations`):
+   has a native `<select>` listing 18 fiscal years. The generic
+   `js_fetcher.fetch_rendered_html_iter_years()` iterates the 5 most
+   recent options, dumping one HTML blob per year-view, yielding ~48
+   PDF anchors total.
+3. **PR page** (`/about-us/press-releases`): year tabs (2007-2026) and
+   month items are pure JS show/hide over a single pre-rendered DOM
+   containing all ~245 archived press releases. The engine does a single
+   Playwright render and discovers every PR in the archive (the FY
+   window then trims to ~25 in scope).
+4. The classifier's URL-prefix corroboration drops `/default-document-library/`
+   chrome (rate cards, escalation matrix) as `other`. Two recent
+   classifier features rescue otherwise-undated docs:
+   - The `YEAR/MONTH/` and `MONTH-DAY-YEAR` URL-path parsers handle
+     Axis's archive paths and a few legacy filenames.
+   - A `year_label_hint` propagated from the year-iteration segment
+     name handles dateless IPs like the Citibank acquisition deck
+     (filename has no date; the FY23 selector option supplies the FY).
+5. Result: **63 documents across FY22-FY26** (37 IPs + 23 PRs + 3
+   quarterly-result PDFs that classify as `financial_result` and land
+   in the IPs folder). **1 PR remains in `undated/`** —
+   `2024-burgundy-private-hurun-india500-national.pdf` has only a year
+   prefix in its filename and is genuinely ambiguous between FY24 and
+   FY25; documented in `banks/Axis_Bank/notes.md`.
+
+The two worked examples together cover both deployment patterns:
+
+| Pattern                    | Bank      | Why                                                                          |
+| -------------------------- | --------- | ---------------------------------------------------------------------------- |
+| Custom `adapter.py`        | HDFC_Bank | Non-`<select>` year picker, aria-label filter, predictable CDN for unlinked older IPs |
+| Config-only, no adapter    | Axis_Bank | Native `<select>` + pre-rendered PR archive that the generic path drives as-is |
 
 ---
 

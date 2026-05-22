@@ -146,18 +146,41 @@ def detect_period(text: str) -> tuple[Optional[int], Optional[int], Optional[dat
         except ValueError:
             cdate = None
 
-    # Month-name + year (e.g., "oct/Q2FY25" or "2024/march/")
+    # Month-name + year. Three orderings observed in the wild:
+    #   * "MONTH YEAR"       — e.g. HDFC's "july-2025-...pdf", Axis's "...september-2024.pdf"
+    #   * "YEAR/MONTH"       — e.g. Axis PR archive paths "/press-release/2024/october/<slug>.pdf"
+    #   * "MONTH DAY YEAR"   — e.g. Axis's "...april-11-2012.pdf" (or "DAY MONTH YEAR" inverse)
+    # Prefer the MONTH-YEAR ordering first (it's the historical default and is
+    # least likely to collide with arbitrary year-shaped path segments like
+    # "2024-25-q2"); fall back to YEAR-MONTH and the day-in-between variants.
     if cdate is None:
         words = re.split(r"[/\-_.\s]+", text.lower())
+
+        def _is_day(s: str) -> bool:
+            return s.isdigit() and 1 <= int(s) <= 31
+
         for i, w in enumerate(words):
-            if w in MONTH_NAMES and i + 1 < len(words):
-                yr_match = re.match(r"(20\d{2})", words[i + 1])
-                if yr_match:
-                    try:
-                        cdate = date(int(yr_match.group(1)), MONTH_NAMES[w], 1)
-                        break
-                    except ValueError:
-                        pass
+            if w not in MONTH_NAMES:
+                continue
+            candidate_indices = [i + 1, i - 1]
+            # If next/prev slot looks like a day-of-month, peek one further.
+            if i + 1 < len(words) and _is_day(words[i + 1]):
+                candidate_indices.append(i + 2)
+            if i - 1 >= 0 and _is_day(words[i - 1]):
+                candidate_indices.append(i - 2)
+            for j in candidate_indices:
+                if not (0 <= j < len(words)):
+                    continue
+                yr_match = re.match(r"(20\d{2})", words[j])
+                if not yr_match:
+                    continue
+                try:
+                    cdate = date(int(yr_match.group(1)), MONTH_NAMES[w], 1)
+                    break
+                except ValueError:
+                    pass
+            if cdate is not None:
+                break
 
     qm = QFY_PAT.search(text)
     if qm:
@@ -182,8 +205,44 @@ def detect_period(text: str) -> tuple[Optional[int], Optional[int], Optional[dat
 
 # --- Top-level classifier -----------------------------------------------------
 
-def classify(url: str, anchor_text: str = "", type_hint: str = "mixed") -> DocMeta:
-    """Decide the document type and fiscal period for a discovered link."""
+_FY_LABEL_PAT = re.compile(r"\b(20\d{2})\s*[-/]+\s*(20\d{2})\b")
+
+
+def _fy_from_year_label(label: str) -> Optional[int]:
+    """Parse the engine's `<select>` year-iteration label (e.g. "2024-2025",
+    "2024 - 2025", "2024/2025") into the END fiscal year (2025).
+
+    Indian fiscal years span Apr–Mar, so a `<select>` option labelled
+    "2024-2025" means FY25 (April 2024 – March 2025). The END year is the
+    canonical FY number throughout this codebase.
+    """
+    if not label:
+        return None
+    m = _FY_LABEL_PAT.search(label)
+    if not m:
+        return None
+    try:
+        start, end = int(m.group(1)), int(m.group(2))
+    except ValueError:
+        return None
+    # Only accept consecutive-year labels — guards against random "2010-2020"
+    # marketing text that happens to look like FY notation.
+    if end != start + 1:
+        return None
+    return end
+
+
+def classify(url: str, anchor_text: str = "", type_hint: str = "mixed",
+             year_label_hint: str = "") -> DocMeta:
+    """Decide the document type and fiscal period for a discovered link.
+
+    `year_label_hint` is the source-of-truth FY context when a link was
+    discovered while iterating a year-shaped `<select>` (e.g. "2024-2025").
+    Used as a *fallback* when the URL / anchor text don't carry their own
+    date — covers IPs like Axis's `presentation-on-axis-bank's-acquisition-of-citibank...pdf`
+    which has no date anywhere in its filename but was iterated under
+    the FY23 (2022-2023) selector option.
+    """
     parsed = urlparse(url)
     path = unquote(parsed.path + " " + parsed.query)
     haystack = f"{path} {anchor_text}"
@@ -211,6 +270,14 @@ def classify(url: str, anchor_text: str = "", type_hint: str = "mixed") -> DocMe
             doc_type = "other"
 
     fy, fq, cdate = detect_period(haystack)
+
+    # Fallback: if no FY could be detected from URL/anchor text, fall back to
+    # the year-iteration label that surfaced the link (e.g. an IP listed under
+    # the FY23 selector option whose filename has no date in it).
+    if fy is None:
+        fy_from_label = _fy_from_year_label(year_label_hint)
+        if fy_from_label is not None:
+            fy = fy_from_label
 
     # Title guess: prefer anchor text; if empty, derive from filename.
     title = anchor_text.strip()

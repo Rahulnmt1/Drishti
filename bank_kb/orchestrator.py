@@ -328,12 +328,19 @@ def process_bank(*, bank_cfg: dict, kb_root: Path, fetcher: Fetcher, index: Inde
     stats.discovered = sum(len(s[1]) for s in deduped_segments)
 
     # ---------- Process each segment with its own consec_seen counter ----------
+    # Segment names from year-iterating sources are formed as "ir:URL#year=LABEL".
+    # Extract LABEL so classify() can use it as a fallback FY hint for links
+    # whose own filename has no date (e.g. Axis's Citibank-acquisition IP).
+    seg_year_re = re.compile(r"#year=([^&]+)$")
     for seg_name, seg_links in deduped_segments:
         log.debug("[%s] processing segment %s (%d link(s))",
                   bank_name, seg_name, len(seg_links))
+        seg_year_label_match = seg_year_re.search(seg_name)
+        seg_year_label = seg_year_label_match.group(1) if seg_year_label_match else ""
         consec_seen = 0
         for link, hint in seg_links:
-            meta = classify(link.url, link.anchor_text, hint)
+            meta = classify(link.url, link.anchor_text, hint,
+                            year_label_hint=seg_year_label)
             # Per-bank classification override (banks/<X>/adapter.py:classify_link)
             # gets to override generic classification — used for banks with
             # weird filename conventions the regex-based classifier misreads.

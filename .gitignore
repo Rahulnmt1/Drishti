@@ -25,6 +25,13 @@ _logs_archive/
 *.swp
 *.swo
 
+# One-off investigation scripts + page dumps used when onboarding a new bank.
+# Findings get distilled into banks/<Bank>/notes.md — the raw probe artifacts
+# are not worth committing (HTML dumps can be 1-2 MB each, and the probe
+# scripts are re-creatable in 5 minutes from the patterns established in
+# earlier _scratch/probe_*.py invocations).
+_scratch/
+
 # Test scaffolding leftover from CI-style verification
 # (the bank folder for "Test_Sync_Bank" sits outside this repo anyway —
 #  it's a sibling of _engine/, under KnowledgeBase/ — so no rule needed

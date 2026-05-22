@@ -1,0 +1,22 @@
+{
+  "name": "Axis_Bank",
+  "ticker": "AXISBANK",
+  "category": "private",
+
+  "_comment_use_nse": "Axis's IR pages already give us exhaustive 5-year coverage (the IP page native <select> exposes 18 years, and the PR page pre-renders ~245 PRs spanning 2007-2025 in a single fetch). NSE adds noise — board-meeting notices, analyst-meet schedules, intimation letters — that don't survive the doc_types_whitelist anyway but cost cookies-warming time per run. Disable.",
+  "use_nse": false,
+
+  "_comment_sources": "Both pages need Playwright. IP page has a NATIVE <select> for fiscal year — the engine's js_fetcher iterates within the history window automatically (no adapter required). PR page tabs (year + month sidebar) are pure JS no-ops over a single pre-rendered DOM; engine's single-render path picks up everything, and the classifier's URL-path /YEAR/MONTH/ parser (added 2026-05-22) extracts FY from the archive URLs. See banks/Axis_Bank/notes.md for the full investigation.",
+  "sources": [
+    {
+      "url": "https://www.axis.bank.in/shareholders-corner/other-information/investor-presentations",
+      "type_hint": "investor_presentation",
+      "requires_js": true
+    },
+    {
+      "url": "https://www.axis.bank.in/about-us/press-releases",
+      "type_hint": "press_release",
+      "requires_js": true
+    }
+  ]
+}
