@@ -3,12 +3,28 @@
 <!--
   LaunchAgent for the Indian-banking knowledge-base daily refresh.
 
-  This template is rendered by install.sh. The four placeholders below
-  (KB_ROOT, PYTHON_BIN, HOUR, MINUTE) are substituted with absolute paths
-  and the chosen run time before the rendered plist is loaded into
-  launchd.
+  Schedule policy (fixed, not configurable):
+    Every day, fires hourly at 10:00, 11:00, 12:00, 13:00, 14:00 and 15:00
+    local time. The wrapper run_daily.sh implements first-success-wins via
+    a per-day flag file (_logs/.success_YYYY-MM-DD.flag) so only the first
+    successful fire of the day actually runs the engine; the remaining 5
+    fires that day cost almost nothing (~30ms — they read the flag, log a
+    skip message, and exit).
 
-  The rendered plist lives at ~/Library/LaunchAgents/com.rahul.banking-kb-daily-refresh.plist
+  Why this shape (vs. one fire at e.g. 10:00 only):
+    - Bank IR sites are flaky around regulatory-filing days (NSE block
+      windows, Akamai rate-limits, AEM cache invalidations). One firing
+      per day means one bad day costs us 24h of staleness.
+    - 10:00 IST is the earliest reasonable hour (most banks file before
+      market open); 15:00 IST is the latest before the trading day ends.
+    - Six attempts in a 6-hour window is generous without being abusive.
+
+  Template placeholders rendered by install.sh:
+    __KB_ROOT__     – absolute path to the KnowledgeBase folder
+    __PYTHON_BIN__  – absolute path to a python3 with the engine's deps
+
+  The rendered plist lives at
+    ~/Library/LaunchAgents/com.rahul.banking-kb-daily-refresh.plist
 -->
 <plist version="1.0">
 <dict>
@@ -31,51 +47,57 @@
         <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
 
+    <!--
+      StartCalendarInterval entries without a Weekday key fire EVERY day.
+      Six entries = six fires per calendar day (10/11/12/13/14/15 local).
+    -->
     <key>StartCalendarInterval</key>
     <array>
         <dict>
-            <key>Weekday</key>
-            <integer>1</integer>
             <key>Hour</key>
-            <integer>__HOUR__</integer>
+            <integer>10</integer>
             <key>Minute</key>
-            <integer>__MINUTE__</integer>
+            <integer>0</integer>
         </dict>
         <dict>
-            <key>Weekday</key>
-            <integer>2</integer>
             <key>Hour</key>
-            <integer>__HOUR__</integer>
+            <integer>11</integer>
             <key>Minute</key>
-            <integer>__MINUTE__</integer>
+            <integer>0</integer>
         </dict>
         <dict>
-            <key>Weekday</key>
-            <integer>3</integer>
             <key>Hour</key>
-            <integer>__HOUR__</integer>
+            <integer>12</integer>
             <key>Minute</key>
-            <integer>__MINUTE__</integer>
+            <integer>0</integer>
         </dict>
         <dict>
-            <key>Weekday</key>
-            <integer>4</integer>
             <key>Hour</key>
-            <integer>__HOUR__</integer>
+            <integer>13</integer>
             <key>Minute</key>
-            <integer>__MINUTE__</integer>
+            <integer>0</integer>
         </dict>
         <dict>
-            <key>Weekday</key>
-            <integer>5</integer>
             <key>Hour</key>
-            <integer>__HOUR__</integer>
+            <integer>14</integer>
             <key>Minute</key>
-            <integer>__MINUTE__</integer>
+            <integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>15</integer>
+            <key>Minute</key>
+            <integer>0</integer>
         </dict>
     </array>
 
-    <!-- If the Mac was asleep/off at the scheduled time, run as soon as it wakes. -->
+    <!--
+      If the Mac was asleep during a scheduled hour, launchd will fire the
+      job once when the system next wakes. The wrapper's per-day flag still
+      protects against double-running on the same day, so this is safe.
+      We don't set RunAtLoad/StartOnMount — those would fire the engine on
+      every login/disk-mount, which is too aggressive.
+    -->
     <key>RunAtLoad</key>
     <false/>
     <key>StartOnMount</key>

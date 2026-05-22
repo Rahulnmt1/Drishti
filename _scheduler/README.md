@@ -1,12 +1,22 @@
 # `_engine/_scheduler/` — how refreshes are triggered
 
-The knowledge base is refreshed **only when you ask it to.** There is no
-unattended daily timer, no background daemon. One script — `refresh.sh`,
-run from Cursor's terminal — is the entire workflow.
+The knowledge base is refreshed two ways:
 
-See `_engine/architecture.svg` for the diagram.
+1. **Automatically**, by a macOS LaunchAgent installed via `./install.sh`.
+   Fires hourly between 10:00 and 15:00 local time, every day. The first
+   fire that succeeds wins; the remaining fires that day no-op via a
+   per-day flag file. Failures are retried by the next hour's fire — no
+   in-process retry loop. After 15:00 the day is over; next attempt is
+   tomorrow at 10:00. See [_The unattended scheduler_](#the-unattended-scheduler-installsh) below.
+2. **Manually**, by `./refresh.sh` from Cursor's terminal. This is
+   independent of the LaunchAgent — runs in your foreground shell, prints
+   live output, doesn't read or write the per-day success flag. Useful
+   for adding a new bank, debugging discovery on one URL, or doing a
+   one-off backfill outside the 10:00–15:00 window.
 
-## The everyday workflow
+See `_engine/architecture.svg` for the overall flow.
+
+## The everyday workflow (`refresh.sh`)
 
 ```bash
 cd /Users/rahul.choubey/Documents/RWork/Banking_Data/KnowledgeBase/_engine/_scheduler
@@ -62,8 +72,9 @@ and the classifier still runs.
 
 - Activates the engine's `.venv` automatically (avoids `ModuleNotFoundError: requests`).
 - Checks `requests` and `bs4` import before running — fails fast with the exact pip command if the venv is missing deps.
-- Refuses to race another engine instance (e.g. if you accidentally start the LaunchAgent — see below) unless you pass `--force`.
+- Refuses to race another engine instance (e.g. an ongoing LaunchAgent fire) unless you pass `--force`.
 - Prints a Cowork-style summary at the end: per-bank breakdown of new downloads, NSE noise separated from real errors, JSON log path.
+- Does **not** read or write the LaunchAgent's per-day success flag. So a manual `./refresh.sh` doesn't prevent the next scheduled fire from running, and a scheduled success doesn't prevent you from running `./refresh.sh` for testing.
 
 Set an alias once:
 
@@ -75,44 +86,93 @@ alias kb='/Users/rahul.choubey/Documents/RWork/Banking_Data/KnowledgeBase/_engin
 # kb --status
 ```
 
-## Files
+## The unattended scheduler (`install.sh`)
+
+Schedule (fixed business policy, not a knob):
+
+| When | What |
+| --- | --- |
+| Every day, 10:00 / 11:00 / 12:00 / 13:00 / 14:00 / 15:00 local time | LaunchAgent fires `run_daily.sh` |
+| First fire of the day that exits 0 | Engine ran successfully; writes `_logs/.success_YYYY-MM-DD.flag`; subsequent fires that day no-op via the flag |
+| Any fire that exits non-zero | Flag NOT written; next hour's fire is the retry |
+| After 15:00, no success yet | Day is over; next attempt is tomorrow at 10:00 |
+
+This handles the common failure modes for IR-page scraping:
+
+- Bank CDN cache invalidation (often during regulatory-filing windows)
+- NSE rate-limits / Akamai blocks that lift after an hour
+- Transient TLS handshake failures from AEM-hosted bank sites
+- A laptop that's asleep at 10:00 — the 11:00 fire catches up
+
+### Install / verify / uninstall
+
+```bash
+cd /Users/rahul.choubey/Documents/RWork/Banking_Data/KnowledgeBase/_engine/_scheduler
+
+./install.sh                                  # auto-detect python (prefers .venv)
+./install.sh --python /opt/homebrew/bin/python3   # explicit python
+
+./status.sh                                   # loaded? next fire? today's flag state?
+
+./uninstall.sh                                # remove the agent
+```
+
+What `install.sh` does:
+
+1. Auto-detects a usable `python3` (prefers `_engine/.venv/bin/python3` so
+   Playwright + all deps are present), checks `requests` and `bs4` import.
+2. Renders `com.rahul.banking-kb-daily-refresh.plist.template` →
+   `~/Library/LaunchAgents/com.rahul.banking-kb-daily-refresh.plist` with
+   `KB_ROOT` and `PYTHON_BIN` substituted.
+3. `launchctl unload && launchctl load` to (re)register the schedule.
+
+Idempotent — re-running re-renders the plist and reloads it.
+
+### Triggering a run manually (without waiting for the next hour)
+
+```bash
+# Run NOW, honoring today's flag (skip if already succeeded)
+./run_daily.sh
+# or, equivalently:
+launchctl start com.rahul.banking-kb-daily-refresh
+
+# Force a re-run within the day (ignores today's flag)
+FORCE=1 ./run_daily.sh
+# or:
+rm "_engine/_logs/.success_$(date +%Y-%m-%d).flag" && ./run_daily.sh
+```
+
+### Files in this folder
 
 | File | Role |
 | --- | --- |
-| `refresh.sh` | **The entry point.** Manual, foreground, from Cursor's terminal. |
-| `run_daily.sh` | Wrapper a LaunchAgent *would* invoke. Used only if you opt back in to the auto-schedule (see below). |
-| `com.rahul.banking-kb-daily-refresh.plist.template` | macOS LaunchAgent plist with `__KB_ROOT__` / `__PYTHON_BIN__` / `__HOUR__` / `__MINUTE__` placeholders. Off by default. |
-| `install.sh` | Renders the template into `~/Library/LaunchAgents/` and `launchctl load`s it. Run this **only** if you want the auto-schedule back. |
-| `uninstall.sh` | `launchctl unload` and remove the plist. Currently the right thing to run if `install.sh` was used earlier. |
-| `status.sh` | Shows whether the agent is loaded, last engine JSON log, last wrapper log tail. |
-| `cowork_report_prompt.md` | Source-of-truth for the Cowork `banking-kb-daily-refresh` task (currently `enabled: false`). |
+| `refresh.sh` | Manual entry point, foreground, from Cursor's terminal. Doesn't touch the success flag. |
+| `run_daily.sh` | LaunchAgent wrapper. Reads/writes `_logs/.success_YYYY-MM-DD.flag`. Exit 0 means "engine succeeded OR today already done"; exit 1 means "engine failed, next hour will retry". |
+| `com.rahul.banking-kb-daily-refresh.plist.template` | macOS LaunchAgent plist with `__KB_ROOT__` and `__PYTHON_BIN__` placeholders. Schedule is hardcoded (6 fires daily, 10-15). |
+| `install.sh` | Renders the template into `~/Library/LaunchAgents/`, `launchctl load`s it. |
+| `uninstall.sh` | `launchctl unload` + remove the plist. |
+| `status.sh` | Loaded? Today's flag state? Next fire time? Last engine + wrapper logs. |
+| `cowork_report_prompt.md` | Source-of-truth for the optional Cowork chat-report task. |
 
-## Opt-in: the unattended LaunchAgent (08:30 Mon-Fri)
+### Files the wrapper reads/writes under `_engine/_logs/`
 
-The macOS LaunchAgent is **not** registered by default in this checkout.
-If you've been running it from an earlier setup, uninstall it:
+| Path | Role |
+| --- | --- |
+| `.success_YYYY-MM-DD.flag` | Per-day "today already done" marker. Created on first engine exit 0; older flags auto-pruned after 14 days. |
+| `wrapper_YYYY-MM-DD_HHMM.log` | One per LaunchAgent fire. Header + engine output + final SKIP/OK/FAIL line. Most-recent 30 retained. |
+| `run_YYYY-MM-DD_HHMM.json` | Engine's own JSON run summary. Written by `run.py`. Kept indefinitely. |
+| `launchd_stdout.log` / `launchd_stderr.log` | launchd's raw capture. Useful only when the wrapper itself didn't get far enough to write its own log. |
 
-```bash
-./uninstall.sh    # launchctl unload + rm ~/Library/LaunchAgents/<label>.plist
-./status.sh       # should now show "loaded: no"
-```
-
-If you ever want to re-enable the unattended daily run:
-
-```bash
-./install.sh                                 # defaults to 08:30 Mon-Fri
-./install.sh --time 07:15                    # custom time
-./install.sh --python /opt/homebrew/bin/python3   # custom python
-```
-
-A few macOS specifics worth knowing if you re-enable:
+### macOS specifics worth knowing
 
 - LaunchAgents need the user to be logged in and the Mac awake. If the Mac
-  is asleep at 08:30, launchd fires on next wake. Multi-day vacations will
-  miss days; check `refresh.sh --status` when you're back.
+  is asleep at 10:00, launchd fires once on next wake. Multi-day vacations
+  will skip days; check `./status.sh` when you're back.
 - `/bin/bash` and the chosen `python3` binary need **Full Disk Access** for
-  the agent to read files under `~/Documents`. We hit this on first install
-  — see the project README's history for the diagnosis.
+  the agent to read files under `~/Documents`. Grant it once via
+  System Settings → Privacy & Security → Full Disk Access.
+- launchd uses **local time**, which is IST for this Mac. India doesn't
+  observe DST, so the 10:00–15:00 window is stable year-round.
 
 ## Opt-in: the Cowork chat report
 
@@ -122,9 +182,7 @@ The Cowork scheduled task `banking-kb-daily-refresh` is currently
 want a daily chat summary of the freshest run log.
 
 The task is pure read-only — it reads `_engine/_logs/run_*.json` and posts
-a summary in chat. It does **not** run the engine itself. Re-enabling it
-without also running `refresh.sh` (or installing the LaunchAgent) will
-produce `STALE` reports whenever the log hasn't been updated recently.
+a summary in chat. It does **not** run the engine itself.
 
 When the prompt text needs to change, edit both `cowork_report_prompt.md`
 (the source-of-truth committed in this folder) **and** the Cowork task

@@ -1,19 +1,30 @@
 #!/usr/bin/env bash
-# Wrapper that launchd invokes once a day. Runs the engine and writes a
-# rotating wrapper-log under _engine/_logs/ so failures are debuggable even
-# when the engine itself didn't get far enough to write its JSON run log.
+# LaunchAgent wrapper for the daily refresh, with first-success-wins logic.
+#
+# Schedule (set by install.sh): fires hourly between 10:00 and 15:00 local
+# time, every day. The first attempt that succeeds writes a per-day flag
+# file; subsequent attempts the same day detect the flag and exit 0
+# without doing any work. So in steady state, only ONE engine run happens
+# per calendar day, and the other 5 firings cost almost nothing.
 #
 # Exit codes:
-#   0  = engine exit 0
-#   1  = engine returned non-zero
-#   2  = pre-flight failed (paths, python missing, etc.)
+#   0 = engine exit 0, OR today already succeeded (flag present, no-op)
+#   1 = engine returned non-zero  (caller may retry — next hour's launchd
+#       fire is the actual retry, no in-process loop here)
+#   2 = pre-flight failed (paths, python missing, etc.)
 #
-# Resolved by install.sh:
+# Files this script reads/writes (all under _engine/_logs/):
+#   wrapper_YYYY-MM-DD_HHMM.log   per-firing log (always created)
+#   .success_YYYY-MM-DD.flag      created on first success of the day
+#
+# Resolved by install.sh (and overridable for manual testing):
 #   KB_ROOT     – absolute path to the KnowledgeBase folder
 #   PYTHON_BIN  – absolute path to a python3 with the engine's deps installed
 #
-# When run manually you can override either via env, e.g.:
-#   KB_ROOT=/path/to/KnowledgeBase PYTHON_BIN=/opt/homebrew/bin/python3 ./run_daily.sh
+# Manual invocation examples:
+#   ./run_daily.sh                                  # honors flag (skip if today already done)
+#   FORCE=1 ./run_daily.sh                          # ignores flag, always runs
+#   KB_ROOT=/path PYTHON_BIN=/opt/.../python3 ./run_daily.sh
 
 set -u
 set -o pipefail
@@ -22,21 +33,39 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # _engine/_scheduler/
 # KB_ROOT defaults to two levels up (KnowledgeBase/), overridable via env.
 KB_ROOT="${KB_ROOT:-$(cd "$HERE/../.." && pwd)}"
 PYTHON_BIN="${PYTHON_BIN:-/usr/bin/env python3}"
+FORCE="${FORCE:-0}"
 
 LOG_DIR="$KB_ROOT/_engine/_logs"
 mkdir -p "$LOG_DIR"
 
+TODAY="$(date +%Y-%m-%d)"
 STAMP="$(date +%Y-%m-%d_%H%M)"
+SUCCESS_FLAG="$LOG_DIR/.success_${TODAY}.flag"
 WRAPPER_LOG="$LOG_DIR/wrapper_${STAMP}.log"
 
 {
   echo "=== banking-kb daily refresh wrapper ==="
-  echo "started_at:   $(date -Iseconds)"
-  echo "host:         $(hostname)"
-  echo "kb_root:      $KB_ROOT"
-  echo "python_bin:   $PYTHON_BIN"
-  echo "engine:       $KB_ROOT/_engine/run.py"
+  echo "started_at:    $(date -Iseconds)"
+  echo "host:          $(hostname)"
+  echo "kb_root:       $KB_ROOT"
+  echo "python_bin:    $PYTHON_BIN"
+  echo "engine:        $KB_ROOT/_engine/run.py"
+  echo "success_flag:  $SUCCESS_FLAG"
+  echo "force_mode:    $FORCE"
   echo ""
+
+  # First-success-wins: skip if today's run already succeeded.
+  if [[ "$FORCE" != "1" && -f "$SUCCESS_FLAG" ]]; then
+    echo "SKIP: today already succeeded — no work to do."
+    echo "      flag contents:"
+    sed 's/^/        /' "$SUCCESS_FLAG"
+    echo ""
+    echo "      To force a re-run within the day:"
+    echo "        rm '$SUCCESS_FLAG' && '$0'"
+    echo "        # or:  FORCE=1 '$0'"
+    echo "finished_at:   $(date -Iseconds)"
+    exit 0
+  fi
 
   if [[ ! -f "$KB_ROOT/_engine/run.py" ]]; then
     echo "FATAL: engine not found at $KB_ROOT/_engine/run.py" >&2
@@ -52,10 +81,33 @@ WRAPPER_LOG="$LOG_DIR/wrapper_${STAMP}.log"
   ENGINE_RC=$?
 
   echo ""
-  echo "engine_exit:  $ENGINE_RC"
-  echo "finished_at:  $(date -Iseconds)"
+  echo "engine_exit:   $ENGINE_RC"
+  echo "finished_at:   $(date -Iseconds)"
+
+  if [[ "$ENGINE_RC" -eq 0 ]]; then
+    {
+      echo "completed_at=$(date -Iseconds)"
+      echo "wrapper_log=$WRAPPER_LOG"
+      echo "engine_exit=0"
+      # Best-effort: link to the engine's own JSON run summary if findable.
+      LATEST_JSON=$(ls -1t "$LOG_DIR"/run_*.json 2>/dev/null | head -1 || true)
+      if [[ -n "$LATEST_JSON" ]]; then
+        echo "engine_run_log=$LATEST_JSON"
+      fi
+    } > "$SUCCESS_FLAG"
+    echo ""
+    echo "OK: wrote $SUCCESS_FLAG (remaining hourly fires today will skip)."
+  else
+    echo ""
+    echo "FAIL: engine exit=$ENGINE_RC. The next hourly launchd fire will retry."
+    echo "      (Retry window is 10:00–15:00 local time. After 15:00, the"
+    echo "       day is over and the next attempt is tomorrow at 10:00.)"
+  fi
+
   exit "$ENGINE_RC"
 } >>"$WRAPPER_LOG" 2>&1
 
-# Keep only the most recent 30 wrapper logs (engine JSON logs are kept forever).
+# Cleanup: keep most recent 30 wrapper logs and 14 days of success flags.
 ls -1t "$LOG_DIR"/wrapper_*.log 2>/dev/null | tail -n +31 | xargs -I{} rm -f "{}" || true
+# Delete success flags older than 14 days. Use find for portability.
+find "$LOG_DIR" -maxdepth 1 -name '.success_*.flag' -type f -mtime +14 -delete 2>/dev/null || true

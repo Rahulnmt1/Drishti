@@ -93,12 +93,12 @@ KnowledgeBase/
 │   ├── _logs/               # JSON run summaries + wrapper/launchd logs
 │   ├── _logs_archive/       # archives of pre-refactor _logs/ (gitignored)
 │   ├── architecture.svg     # diagram of the manual-only flow
-│   ├── _scheduler/          # the manual refresh.sh + opt-in LaunchAgent + Cowork prompt
-│   │   ├── refresh.sh                                  # ← THE entry point. Includes `focus` / `unfocus` subcommands.
-│   │   ├── run_daily.sh                                # wrapper launchd would invoke (LaunchAgent is opt-in)
-│   │   ├── com.rahul.banking-kb-daily-refresh.plist.template
-│   │   ├── install.sh / uninstall.sh / status.sh       # opt-in LaunchAgent lifecycle (off by default)
-│   │   ├── cowork_report_prompt.md                     # report prompt (Cowork task is disabled by default)
+│   ├── _scheduler/          # manual refresh.sh + LaunchAgent (auto-on) + Cowork prompt (opt-in)
+│   │   ├── refresh.sh                                  # ← manual entry point. `focus` / `unfocus` subcommands.
+│   │   ├── run_daily.sh                                # LaunchAgent wrapper. Reads/writes the per-day success flag.
+│   │   ├── com.rahul.banking-kb-daily-refresh.plist.template   # fires hourly 10-15 every day (fixed schedule)
+│   │   ├── install.sh / uninstall.sh / status.sh       # LaunchAgent lifecycle
+│   │   ├── cowork_report_prompt.md                     # report prompt (Cowork task is `enabled: false`)
 │   │   └── README.md
 │   ├── kb_index.sqlite      # FTS5 search index (created on first run, gitignored)
 │   ├── requirements.txt
@@ -334,9 +334,20 @@ URLs are skipped via the `manifest` table.
 
 ## Refreshing the KB
 
-The engine runs **only when you trigger it.** No timer, no daemon — both the
-macOS LaunchAgent and the Cowork scheduled task are disabled. One script,
-one entry point.
+Two ways to refresh, both fully wired up:
+
+- **Automatic** — a macOS LaunchAgent fires `run_daily.sh` hourly between
+  10:00 and 15:00 local time, every day. The first fire that succeeds writes
+  a per-day flag (`_logs/.success_YYYY-MM-DD.flag`); subsequent fires that
+  day detect the flag and exit in ~30 ms. Failures are retried by the next
+  hour's fire. After 15:00 with no success, the day is over and the next
+  attempt is tomorrow at 10:00. See [Daily auto-schedule](#daily-auto-schedule)
+  to install / verify / uninstall.
+- **Manual** — `./_scheduler/refresh.sh` from Cursor's terminal. Foreground,
+  prints live output, independent of the LaunchAgent. Use this for adding a
+  new bank, debugging discovery on one URL, or running outside the 10–15
+  window. Manual runs don't touch the per-day success flag (they don't make
+  the next scheduled fire skip).
 
 ![Architecture](architecture.svg)
 
@@ -417,24 +428,55 @@ alias kb='/Users/rahul.choubey/Documents/RWork/Banking_Data/KnowledgeBase/_engin
 # kb --status
 ```
 
-### Re-enabling the daily auto-schedule (if you ever want it back)
+### Daily auto-schedule
 
-Two switches are off by default in this checkout:
+The macOS LaunchAgent is the unattended path. Schedule is fixed business
+policy (not a knob): **6 fires per day at 10:00 / 11:00 / 12:00 / 13:00 /
+14:00 / 15:00 local time, every day**, with first-success-wins so only one
+fire per day actually runs the engine.
 
-- **macOS LaunchAgent** (the unattended 08:30 Mon-Fri run): turn back on
-  with `./_engine/_scheduler/install.sh` (custom time via `--time HH:MM`).
-  Uninstall with `./_engine/_scheduler/uninstall.sh`.
-- **Cowork scheduled task** `banking-kb-daily-refresh`: currently
-  `enabled: false`. Toggle it back on from Cowork's Scheduled sidebar
-  (or via `mcp__scheduled-tasks__update_scheduled_task` with `enabled: true`).
-  The task only reads `_engine/_logs/*.json` — it doesn't run the engine
-  itself, so re-enabling it without re-installing the LaunchAgent will
-  start producing `STALE` reports whenever you haven't run `refresh.sh`
-  recently. That's by design.
+| When | What happens |
+| --- | --- |
+| 10:00 | Wrapper fires. If `_logs/.success_$(today).flag` doesn't exist, it runs the engine. On exit 0, it writes the flag. |
+| 11:00–15:00 | Wrapper fires. If the flag exists, it logs "today already succeeded — no work to do" and exits 0 in ~30 ms. Otherwise it retries. |
+| After 15:00 with no success | Day is over. The flag isn't written. Next attempt is tomorrow at 10:00. |
+| Mac was asleep at fire time | launchd fires the missed event on next wake. Flag protects against double-running on the same day. |
 
-The two switches are independent. Re-enable just one if you want chat
-reports of your manual runs without an unattended schedule, or just the
-other for unattended fetches with no chat reporting.
+Install / verify / uninstall:
+
+```bash
+cd /Users/rahul.choubey/Documents/RWork/Banking_Data/KnowledgeBase/_engine/_scheduler
+
+./install.sh                    # auto-detects python (prefers .venv with Playwright)
+./install.sh --python /opt/homebrew/bin/python3   # explicit python
+
+./status.sh                     # loaded? next fire? today's flag state?
+./uninstall.sh                  # remove the agent
+```
+
+Trigger / force / inspect:
+
+```bash
+# Trigger NOW, honoring today's flag (skip if already succeeded today)
+launchctl start com.rahul.banking-kb-daily-refresh
+# or:  ./run_daily.sh
+
+# Force a re-run within the day (ignores today's flag)
+FORCE=1 ./run_daily.sh
+# or:  rm "_logs/.success_$(date +%Y-%m-%d).flag" && ./run_daily.sh
+
+# Tail the latest wrapper log
+ls -1t _engine/_logs/wrapper_*.log | head -1 | xargs tail -30
+```
+
+### Optional: Cowork chat report
+
+`banking-kb-daily-refresh` Cowork task is `enabled: false` by default.
+Toggle on from Cowork's Scheduled sidebar (or via
+`mcp__scheduled-tasks__update_scheduled_task` with `enabled: true`) if you
+want a daily chat summary of the freshest engine run log. The task is
+read-only — it doesn't run the engine itself, just summarizes
+`_engine/_logs/run_*.json`.
 
 ### Status check
 
